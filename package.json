@@ -1,0 +1,18 @@
+{
+  "name": "ollama-mcp-bridge-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monorepo: a universal MCP server bridging any MCP client to a local Ollama instance, plus a Claude Desktop one-click installer.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  }
+}

@@ -1,0 +1,44 @@
+ollama-mcp-bridge
+Copyright 2026 ollama-mcp-bridge contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+================================================================================
+Third-party attributions
+================================================================================
+
+This project draws inspiration and design ideas from the following open-source
+projects. Where specific code is directly adapted, the affected file includes a
+header comment identifying the source and its original license. Items listed
+here without a specific file reference are acknowledged as high-level design
+inspirations rather than code reuse.
+
+--------------------------------------------------------------------------------
+aplaceforallmystuff/mcp-local-llm — MIT License
+https://github.com/aplaceforallmystuff/mcp-local-llm
+
+    Inspiration for task-semantic MCP tool naming (local_summarize,
+    local_draft, local_classify, local_extract, local_transform,
+    local_complete), and for exposing configuration through environment
+    variables rather than hardcoded defaults.
+
+--------------------------------------------------------------------------------
+yayoboy/Claude-Desktop-LLM — MIT License
+https://github.com/yayoboy/Claude-Desktop-LLM
+
+    Reference for the Claude Desktop .mcpb manifest.json structure,
+    user_config schema, and build-script pattern. Used when designing
+    the packages/claude-desktop bundle.
+
+--------------------------------------------------------------------------------
+rawveg/ollama-mcp — AGPL-3.0-or-later
+https://github.com/rawveg/ollama-mcp
+
+    Referenced for integration patterns with the official `ollama` npm SDK
+    (retry/backoff and error-mapping approaches). No code is copied from this
+    project; only behavioral patterns are reproduced independently.
+
+================================================================================
+
+When additional upstream sources are incorporated during development, this file
+will be updated alongside the commit that introduces them.
