@@ -2,6 +2,12 @@
 import { Command } from 'commander';
 import { detectHardware } from '../src/hardware/detect.js';
 import { fetchCatalog, CatalogFetchError } from '../src/models/catalog.js';
+import {
+  OllamaClient,
+  OllamaDaemonError,
+  DEFAULT_OLLAMA_HOST,
+} from '../src/ollama/client.js';
+import { runBridgeServerStdio } from '../src/mcp/server.js';
 
 const program = new Command();
 
@@ -47,6 +53,48 @@ program
         process.stderr.write(`catalog: ${(err as Error).message}\n`);
       }
       process.exitCode = 1;
+    }
+  });
+
+program
+  .command('models')
+  .description('Show Ollama daemon status and installed models.')
+  .option('--host <url>', 'Ollama host', DEFAULT_OLLAMA_HOST)
+  .action(async (opts: { host: string }) => {
+    const client = new OllamaClient(opts.host);
+    try {
+      const { version } = await client.ping();
+      const installed = await client.listInstalled();
+      process.stdout.write(`ollama daemon: v${version} at ${opts.host}\n`);
+      if (installed.length === 0) {
+        process.stdout.write('no models installed. try: ollama pull qwen3.5:4b\n');
+        return;
+      }
+      for (const m of installed) {
+        const gb = (m.sizeBytes / 1024 ** 3).toFixed(1);
+        process.stdout.write(`${m.name}  ${gb} GB  (modified ${m.modifiedAt})\n`);
+      }
+    } catch (err) {
+      const msg =
+        err instanceof OllamaDaemonError ? err.message : (err as Error).message;
+      process.stderr.write(`models: ${msg}\n`);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('serve')
+  .description('Run the MCP bridge server over stdio (for MCP clients).')
+  .option('--model <name>', 'Ollama model to delegate tasks to', 'qwen3.5:4b')
+  .option('--host <url>', 'Ollama host', DEFAULT_OLLAMA_HOST)
+  .action(async (opts: { model: string; host: string }) => {
+    try {
+      await runBridgeServerStdio({ model: opts.model, ollamaHost: opts.host });
+    } catch (err) {
+      const msg =
+        err instanceof OllamaDaemonError ? err.message : (err as Error).message;
+      process.stderr.write(`serve: ${msg}\n`);
+      process.exit(1);
     }
   });
 
