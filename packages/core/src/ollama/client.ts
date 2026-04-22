@@ -19,6 +19,11 @@ export interface ChatOptions {
    * thinking models burn minutes on trivial tasks. Opt in per-call if needed.
    */
   think?: boolean | 'low' | 'medium' | 'high';
+  /**
+   * Ollama keep_alive parameter (seconds, duration string, or -1 for
+   * forever). Controls how long the model stays loaded after the call.
+   */
+  keepAlive?: string | number;
   signal?: AbortSignal;
 }
 
@@ -79,6 +84,7 @@ export class OllamaClient {
       messages,
       stream: false,
       think: opts.think ?? false,
+      keep_alive: opts.keepAlive,
       options: opts.temperature === undefined ? undefined : { temperature: opts.temperature },
     });
     return res.message.content;

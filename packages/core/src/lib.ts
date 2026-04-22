@@ -13,3 +13,11 @@ export type { InstalledModel, ChatOptions } from './ollama/client.js';
 
 export { buildBridgeServer, runBridgeServerStdio } from './mcp/server.js';
 export type { BridgeServerOptions } from './mcp/server.js';
+
+export {
+  DEFAULT_CONFIG,
+  withOverrides,
+  tierForTool,
+  modelForTool,
+} from './config/tiers.js';
+export type { Tier, TierConfig, BridgeConfig, ResolveOptions } from './config/tiers.js';

@@ -8,6 +8,7 @@ import {
   DEFAULT_OLLAMA_HOST,
 } from '../src/ollama/client.js';
 import { runBridgeServerStdio } from '../src/mcp/server.js';
+import { DEFAULT_CONFIG, withOverrides } from '../src/config/tiers.js';
 
 const program = new Command();
 
@@ -67,7 +68,9 @@ program
       const installed = await client.listInstalled();
       process.stdout.write(`ollama daemon: v${version} at ${opts.host}\n`);
       if (installed.length === 0) {
-        process.stdout.write('no models installed. try: ollama pull qwen3.5:4b\n');
+        process.stdout.write(
+          `no models installed. try: ollama pull ${DEFAULT_CONFIG.tiers.B.model}\n`,
+        );
         return;
       }
       for (const m of installed) {
@@ -85,17 +88,39 @@ program
 program
   .command('serve')
   .description('Run the MCP bridge server over stdio (for MCP clients).')
-  .option('--model <name>', 'Ollama model to delegate tasks to', 'qwen3.5:4b')
+  .option(
+    '--tier-b <name>',
+    'Ollama model for Tier B (summarize, classify, extract)',
+    process.env.OMCP_TIER_B ?? DEFAULT_CONFIG.tiers.B.model,
+  )
+  .option(
+    '--tier-c <name>',
+    'Ollama model for Tier C (summarize-long, heavy tasks)',
+    process.env.OMCP_TIER_C ?? DEFAULT_CONFIG.tiers.C.model,
+  )
   .option('--host <url>', 'Ollama host', DEFAULT_OLLAMA_HOST)
-  .action(async (opts: { model: string; host: string }) => {
+  .action(async (opts: { tierB: string; tierC: string; host: string }) => {
+    const config = withOverrides(DEFAULT_CONFIG, {
+      tierOverrides: {
+        B: { model: opts.tierB },
+        C: { model: opts.tierC },
+      },
+    });
     try {
-      await runBridgeServerStdio({ model: opts.model, ollamaHost: opts.host });
+      await runBridgeServerStdio({ config, ollamaHost: opts.host });
     } catch (err) {
       const msg =
         err instanceof OllamaDaemonError ? err.message : (err as Error).message;
       process.stderr.write(`serve: ${msg}\n`);
       process.exit(1);
     }
+  });
+
+program
+  .command('config')
+  .description('Print the effective bridge config (tiers + tool routing).')
+  .action(() => {
+    process.stdout.write(`${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`);
   });
 
 program.parseAsync(process.argv).catch((err) => {
