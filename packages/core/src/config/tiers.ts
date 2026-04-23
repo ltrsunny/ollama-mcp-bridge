@@ -45,9 +45,14 @@ export const DEFAULT_CONFIG: BridgeConfig = {
   tiers: {
     B: {
       model: 'qwen3:4b-instruct-2507-q4_K_M',
-      keepAlive: -1,
+      // 10 minutes idle: on a 16 GB Mac, -1 (forever) pins ~3.5 GB VRAM even
+      // when the bridge is quiet. 10 min trades one cold start per idle hour
+      // for headroom; tighten via OMCP_TIER_B_KEEPALIVE if the host is roomy.
+      keepAlive: '10m',
     },
     C: {
+      // 5 minutes idle — Tier C is explicitly on-demand; no reason to hold
+      // the larger weights when the long-summarize tool isn't being called.
       model: 'qwen2.5:7b',
       keepAlive: 300,
     },
