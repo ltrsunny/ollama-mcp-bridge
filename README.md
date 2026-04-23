@@ -5,8 +5,9 @@
 > model. Save tokens. Stay private. Run offline-capable grunt work on your own
 > machine.
 
-**Status: pre-alpha.** The working name will be reconsidered before the first
-public release.
+**Status: v0.1.1 — alpha.** Five tools available: `summarize`, `summarize-long`,
+`classify`, `extract`, `transform`. The working name will be reconsidered before
+the first public release.
 
 ## Layout
 
@@ -21,6 +22,120 @@ This is a monorepo with two packages:
 The split exists because the Model Context Protocol is client-neutral: other
 clients (Cursor, Cline, Zed, …) also consume MCP servers, so the bridging
 logic lives in a framework-agnostic package.
+
+## Tools
+
+All five tools are available over any MCP-compatible client (Claude Desktop,
+Cursor, Cline, Zed, …). They all share the same security pipeline and emit
+`_meta` telemetry on every response.
+
+### `summarize`
+
+```
+summarize(text: string) → Markdown bullet-point summary
+```
+
+Delegates to **Tier B** (`qwen3:4b`). Best for documents up to ~4 K tokens.
+
+### `summarize-long`
+
+```
+summarize-long(text: string) → Markdown bullet-point summary
+```
+
+Routes to **Tier C** (`qwen2.5:7b`) for long-context documents.
+
+### `classify`
+
+```
+classify(
+  text:           string,
+  categories:     string[],
+  allow_multiple: boolean = false,
+  explain:        boolean = false,
+) → { labels: string[], reason?: string }
+```
+
+Grammar-constrained classification — the model's output is **forced** to be a
+valid member of `categories` via Ollama's `format:` schema feature. When
+`allow_multiple` is `true`, multiple labels are allowed. When `explain` is
+`true`, a `reason` string is appended (source language preserved).
+
+### `extract`
+
+```
+extract(text: string, schema: JSONSchemaObject) → { data: <schema-typed> } | isError
+```
+
+Structured-data extraction against an arbitrary JSON Schema. The bridge
+automatically strips constraints that crash Ollama's grammar compiler before
+forwarding (see **Schema constraints** below). Stripped constraints are surfaced
+in `_meta` so you can re-validate with Zod on your side.
+
+**Schema constraints** — the sanitizer strips these silently and reports them in
+`_meta["dev.ollamamcpbridge/schema_stripped"]`:
+
+| Constraint | Example Zod | Status |
+|---|---|---|
+| `pattern` | `z.string().regex(/…/)` | Stripped — use Zod re-validation |
+| `format: "email"` | `z.email()` | Stripped |
+| `format: "uri"` | `z.url()` | Stripped |
+| `format: "date-time"` | `z.string().datetime()` | Stripped |
+| `multipleOf` | `z.number().multipleOf(0.01)` | Stripped |
+| `$ref` | cross-schema references | **Hard reject** → `isError: true` (flatten first) |
+
+**Tip:** prefer `z.discriminatedUnion` over bare `z.union` when branches have
+disjoint output shapes — structural grammar is enforced but branch-selection
+semantics are not (the model may pick the wrong branch on ambiguous inputs).
+
+### `transform`
+
+```
+transform(text: string, instruction: string) → string
+```
+
+Free-form text transformation. The model applies `instruction` to `text` and
+returns only the result. Language is preserved unless the instruction says otherwise.
+
+---
+
+## Security
+
+All tool inputs pass through a two-layer prompt-injection defense before
+reaching Ollama:
+
+1. **NFKC normalization** (Unicode TR#15) — collapses Cyrillic/Greek homoglyphs
+   to ASCII, defeating basic homoglyph injection.
+2. **Spotlighting** (Microsoft, arxiv 2403.14720) — wraps untrusted text in a
+   unique per-call delimiter announced in the system prompt so the model treats
+   it as data, not instructions.
+3. **`@stackone/defender` Tier-1** (always-on) — regex/pattern classifier that
+   blocks role-marker overrides, encoding attacks, and instruction-injection
+   patterns. Blocked inputs return `isError: true` without calling Ollama.
+4. **Tier-2 ML classifier** (opt-in) — MiniLM ONNX model via `@stackone/defender`.
+   Enable with `OMCP_DEFENDER_TIER2=1`. Adds ~475 MB in peer dependencies
+   (`onnxruntime-node`, `@huggingface/transformers`).
+
+---
+
+## `_meta` telemetry
+
+Every tool response includes a `_meta` record with observability data:
+
+| Key | Always? | Description |
+|---|---|---|
+| `dev.ollamamcpbridge/model` | ✓ | Resolved Ollama model tag |
+| `dev.ollamamcpbridge/tier` | ✓ | `B` or `C` |
+| `dev.ollamamcpbridge/latency_ms` | ✓ | End-to-end wall-clock ms |
+| `dev.ollamamcpbridge/prompt_tokens` | ✓ | `prompt_eval_count` from Ollama |
+| `dev.ollamamcpbridge/completion_tokens` | ✓ | `eval_count` from Ollama |
+| `dev.ollamamcpbridge/defender/tier` | When defense ran | `1`, `1+2`, or `off` |
+| `dev.ollamamcpbridge/defender/score` | When Tier-2 ran | Float 0–1 confidence |
+| `dev.ollamamcpbridge/defender/risk` | When flagged | Tier-1 risk level string |
+| `dev.ollamamcpbridge/schema_validation` | `extract` only | `passed` or `failed` |
+| `dev.ollamamcpbridge/schema_stripped` | `extract` only (when stripped) | List of stripped JSON Pointer paths |
+
+---
 
 ## Development
 
