@@ -24,7 +24,31 @@ export interface ChatOptions {
    * forever). Controls how long the model stays loaded after the call.
    */
   keepAlive?: string | number;
+  /**
+   * JSON schema passed to Ollama `format:` field for grammar-constrained
+   * structured output. Used by classify (enum schema) and extract (full
+   * object schema). Callers must pre-sanitize with sanitizeSchemaForOllama()
+   * to avoid GBNF crashes on pattern/format:email/format:uri constraints.
+   */
+  format?: object;
+  /**
+   * Maximum number of tokens the model may generate. Passed as
+   * `options.num_predict` to Ollama. Default: unlimited.
+   */
+  numPredict?: number;
   signal?: AbortSignal;
+}
+
+/**
+ * Result returned by OllamaClient.chat(). Includes the text content plus
+ * token usage counters from Ollama (0 when the daemon doesn't report them).
+ */
+export interface ChatResult {
+  text: string;
+  /** Tokens used to encode the prompt (Ollama: prompt_eval_count). */
+  promptTokens: number;
+  /** Tokens generated in the completion (Ollama: eval_count). */
+  completionTokens: number;
 }
 
 export class OllamaDaemonError extends Error {
@@ -74,10 +98,14 @@ export class OllamaClient {
     }));
   }
 
-  async chat(opts: ChatOptions): Promise<string> {
+  async chat(opts: ChatOptions): Promise<ChatResult> {
     const messages: Message[] = [];
     if (opts.system) messages.push({ role: 'system', content: opts.system });
     messages.push({ role: 'user', content: opts.user });
+
+    const ollamaOptions: Record<string, unknown> = {};
+    if (opts.temperature !== undefined) ollamaOptions['temperature'] = opts.temperature;
+    if (opts.numPredict !== undefined) ollamaOptions['num_predict'] = opts.numPredict;
 
     const res = await this.ollama.chat({
       model: opts.model,
@@ -85,8 +113,14 @@ export class OllamaClient {
       stream: false,
       think: opts.think ?? false,
       keep_alive: opts.keepAlive,
-      options: opts.temperature === undefined ? undefined : { temperature: opts.temperature },
+      format: opts.format,
+      options: Object.keys(ollamaOptions).length > 0 ? ollamaOptions : undefined,
     });
-    return res.message.content;
+
+    return {
+      text: res.message.content,
+      promptTokens: res.prompt_eval_count ?? 0,
+      completionTokens: res.eval_count ?? 0,
+    };
   }
 }
