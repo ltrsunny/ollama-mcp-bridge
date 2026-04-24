@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Honest token-savings messaging in tool descriptions** — reworded `summarize`, `summarize-long`, `extract`, and `transform` descriptions (and their `text` / `source_uri` parameter hints) to state clearly that real frontier-token savings only happen with `source_uri`. Inline `text` does not save tokens when the content is already in the caller's context — "if you can pass it inline, you already paid for it." Previously the tools all claimed "Saves frontier tokens, keeps data local" without qualification, which was misleading for the inline-text path.
+- **`classify` repositioned** — `classify` has no `source_uri` entry point and typically runs on short inputs already in context, so token savings were never a real value prop. Description now leads with **reliability** (grammar-constrained output guaranteeing valid category membership), with data locality as a secondary benefit.
+- No code behavior change; descriptions are what the calling frontier LLM reads when deciding how to invoke the tools.
+
+### Infrastructure
+
+- **GitHub Actions CI** — added `.github/workflows/ci.yml` with two jobs (build + vitest unit tests) matrixed across Node 22 and Node 24. Triggered on push to `main` and PRs to `main`. Guardrails: `contents: read` permission, 10-min per-job timeout, cancel-in-progress concurrency, `fail-fast: false`. Ollama-dependent tests (`smoke-bridge.mjs`, `probe-numctx.mjs`) are intentionally excluded — see `CONTRIBUTING.md`.
+- **`CONTRIBUTING.md`** — documents the Tier-1 (CI) vs Tier-2 (local-only) test split.
+- **README CI badge**.
+
+---
+
 ## [0.1.2] — 2026-04-24
 
 ### Theme

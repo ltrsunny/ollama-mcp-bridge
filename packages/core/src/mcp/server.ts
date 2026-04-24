@@ -154,15 +154,19 @@ export function buildBridgeServer(
       title: 'Summarize text via local Ollama',
       description:
         'DELEGATION GUIDANCE: delegate short-to-medium summarization (up to ~2000 words) ' +
-        'to a local model. Produces plain-prose output. Saves frontier tokens, keeps data local. ' +
-        'For documents longer than ~2000 words prefer summarize-long.',
+        'to a local model. Produces plain-prose output. Data stays local. ' +
+        'For documents longer than ~2000 words prefer summarize-long. ' +
+        'TOKEN SAVINGS: real frontier-token savings require source_uri — the bridge reads ' +
+        'the source directly so it never enters your context. Inline `text` saves no tokens ' +
+        'if the content is already in your context (you already paid for it).',
       inputSchema: {
         text: z.string().min(1).optional().describe(
-          'The text to summarize. Required if source_uri is not provided.',
+          'The text to summarize. Required if source_uri is not provided. ' +
+          'Saves no frontier tokens if the content is already in your context — prefer source_uri in that case.',
         ),
         source_uri: z.string().min(1).optional().describe(
           'URI to read source from instead of text. Supports file:// and http(s)://. ' +
-          'Required if text is not provided. Reading source directly saves frontier tokens.',
+          'Required if text is not provided. This is the only path that actually saves frontier tokens.',
         ),
         style: z.string().optional().describe(
           'Optional style hint, e.g. "one sentence", "three bullet points", "for a non-technical reader".',
@@ -234,14 +238,18 @@ export function buildBridgeServer(
       description:
         'DELEGATION GUIDANCE: delegate long-document summarization (~2000+ words) to a ' +
         'larger local model (Tier C). Produces 1-2 sentence lead + 3-6 bullet points. ' +
-        'Higher latency than summarize. Prefer summarize for anything under ~2000 words.',
+        'Higher latency than summarize. Prefer summarize for anything under ~2000 words. ' +
+        'TOKEN SAVINGS: strongly prefer source_uri for long documents — it is the only ' +
+        'path that actually saves frontier tokens. Passing inline `text` that is already ' +
+        'in your context saves nothing; for long documents that waste is largest here.',
       inputSchema: {
         text: z.string().min(1).optional().describe(
-          'The document to summarize. Can be several thousand words. Required if source_uri is not provided.',
+          'The document to summarize. Can be several thousand words. Required if source_uri is not provided. ' +
+          'Saves no frontier tokens if already in your context — source_uri is strongly preferred for long content.',
         ),
         source_uri: z.string().min(1).optional().describe(
           'URI to read source from instead of text. Supports file:// and http(s)://. ' +
-          'Required if text is not provided. Especially useful for long documents — reading directly saves frontier tokens.',
+          'Required if text is not provided. Strongly preferred for long content — the only path that saves frontier tokens.',
         ),
         style: z.string().optional().describe(
           'Optional style hint. Default is 1-2 sentence lead plus 3-6 bullets.',
@@ -314,7 +322,11 @@ export function buildBridgeServer(
         'DELEGATION GUIDANCE: delegate text classification to a local model. ' +
         'The model is grammar-constrained to emit only labels from the provided category list — ' +
         'no hallucinated labels possible. Use for sentiment, intent, topic, priority, or any ' +
-        'enum-typed labeling task. Saves frontier tokens, keeps data local.',
+        'enum-typed labeling task. ' +
+        'VALUE: reliability, not token savings. Grammar-constrained output guarantees every ' +
+        'response is a valid member of your categories — something small local models cannot ' +
+        'reliably self-enforce. Data stays local. This tool does not accept source_uri because ' +
+        'classification inputs are typically already short and in your context.',
       inputSchema: {
         text: z.string().min(1).describe('The text to classify.'),
         categories: z.array(z.string()).min(2).describe(
@@ -398,14 +410,18 @@ export function buildBridgeServer(
         'branch selection prefer z.discriminatedUnion). ' +
         'Constraints that crash the grammar compiler (pattern, format:email/uri/date-time, ' +
         'multipleOf) are automatically stripped and surfaced in _meta.schema_stripped. ' +
-        'Saves frontier tokens, keeps data local.',
+        'Data stays local. ' +
+        'TOKEN SAVINGS: real frontier-token savings require source_uri — inline `text` that ' +
+        'is already in your context saves no tokens. The grammar-constrained output is the ' +
+        'primary value regardless of input mode.',
       inputSchema: {
         text: z.string().min(1).optional().describe(
-          'The source text to extract from. Required if source_uri is not provided.',
+          'The source text to extract from. Required if source_uri is not provided. ' +
+          'Saves no frontier tokens if the content is already in your context — prefer source_uri in that case.',
         ),
         source_uri: z.string().min(1).optional().describe(
           'URI to read source from instead of text. Supports file:// and http(s)://. ' +
-          'Required if text is not provided.',
+          'Required if text is not provided. This is the only path that actually saves frontier tokens.',
         ),
         schema: z.record(z.string(), z.unknown()).describe(
           'JSON Schema object describing the desired output. Obtain via z.toJSONSchema(yourSchema). ' +
@@ -499,14 +515,18 @@ export function buildBridgeServer(
         'DELEGATION GUIDANCE: delegate text rewriting to a local model. ' +
         'Apply any natural-language instruction: translate, summarize into a different format, ' +
         'fix grammar, change tone, convert markdown to plain text, etc. ' +
-        'Returns only the transformed text, no commentary. Saves frontier tokens, keeps data local.',
+        'Returns only the transformed text, no commentary. Data stays local. ' +
+        'TOKEN SAVINGS: real frontier-token savings require source_uri — inline `text` that ' +
+        'is already in your context saves no tokens. Inline mode is still useful for ' +
+        'transforming content you just generated or small test snippets; be aware it is not delegation in the token-saving sense.',
       inputSchema: {
         text: z.string().min(1).optional().describe(
-          'The source text to transform. Required if source_uri is not provided.',
+          'The source text to transform. Required if source_uri is not provided. ' +
+          'Saves no frontier tokens if the content is already in your context — prefer source_uri in that case.',
         ),
         source_uri: z.string().min(1).optional().describe(
           'URI to read source from instead of text. Supports file:// and http(s)://. ' +
-          'Required if text is not provided.',
+          'Required if text is not provided. This is the only path that actually saves frontier tokens.',
         ),
         instruction: z.string().min(1).describe(
           'The transformation instruction, e.g. "Translate to Spanish", "Fix grammar", "Make it more formal".',
