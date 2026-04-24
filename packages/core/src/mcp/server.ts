@@ -8,6 +8,7 @@ import {
   tierForTool,
 } from '../config/tiers.js';
 import { buildMeta } from './meta.js';
+import { buildFooter } from './footer.js';
 import { BridgeDefense } from './defense.js';
 import { sanitizeSchemaForOllama } from './sanitize.js';
 
@@ -161,9 +162,14 @@ export function buildBridgeServer(
           user,
           temperature: 0.2,
         });
+        const latencyMs = Date.now() - t0;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
-          content: [{ type: 'text', text: result.text.trim() }],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result, defender: defenderMeta }),
+          content: [
+            { type: 'text' as const, text: result.text.trim() },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
+          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
         };
       } catch (err) {
         return toolCallError(err);
@@ -220,9 +226,14 @@ export function buildBridgeServer(
           user,
           temperature: 0.2,
         });
+        const latencyMs = Date.now() - t0;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
-          content: [{ type: 'text', text: result.text.trim() }],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result, defender: defenderMeta }),
+          content: [
+            { type: 'text' as const, text: result.text.trim() },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
+          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
         };
       } catch (err) {
         return toolCallError(err);
@@ -295,9 +306,14 @@ export function buildBridgeServer(
           temperature: 0.1, // lower temp for classification
           format: formatSchema,
         });
+        const latencyMs = Date.now() - t0;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
-          content: [{ type: 'text', text: result.text }],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result, defender: defenderMeta }),
+          content: [
+            { type: 'text' as const, text: result.text },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
+          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
         };
       } catch (err) {
         return toolCallError(err);
@@ -371,12 +387,17 @@ export function buildBridgeServer(
           format: sanitized.schema,
           numPredict: 2048,
         });
+        const latencyMs = Date.now() - t0;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
-          content: [{ type: 'text', text: result.text }],
+          content: [
+            { type: 'text' as const, text: result.text },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
           _meta: buildMeta({
             model: tierCfg.model,
             tier: tierKey,
-            latencyMs: Date.now() - t0,
+            latencyMs,
             result,
             defender: defenderMeta,
             schemaValidation: 'passed',
@@ -438,9 +459,14 @@ export function buildBridgeServer(
           user: `Instruction: ${instruction}\n\nText:\n${safeText}`,
           temperature: 0.3,
         });
+        const latencyMs = Date.now() - t0;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
-          content: [{ type: 'text', text: result.text.trim() }],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result, defender: defenderMeta }),
+          content: [
+            { type: 'text' as const, text: result.text.trim() },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
+          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
         };
       } catch (err) {
         return toolCallError(err);
