@@ -144,7 +144,7 @@ export function buildBridgeServer(
 
   const server = new McpServer({
     name: options.name ?? 'ollama-mcp-bridge',
-    version: options.version ?? '0.1.1',
+    version: options.version ?? '0.1.2',
   });
 
   // ── summarize ─────────────────────────────────────────────────────────────

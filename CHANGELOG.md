@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] — 2026-04-24
+
+### Theme
+
+**"Prove it saves tokens"** — closes the fundamental gap where delegation via tool arguments was actually *more* expensive than inline processing. Adds direct-read capability so source content never enters the frontier's context window, plus a visible feedback loop so the frontier LLM can see whether it saved anything.
+
+### Added
+
+- **`source_uri` parameter (F2)** — `summarize`, `summarize-long`, `extract`, and `transform` now accept an optional `source_uri: string` (mutually exclusive with `text`). The bridge reads content directly from a `file://` or `http(s)://` URI; raw source never traverses the frontier's context window.
+  - `file://`: unrestricted local reads (bridge runs with the user's own filesystem access).
+  - `http(s)://`: size cap (default 10 MB, `OMCP_URL_MAX_BYTES`), timeout (default 30 s, `OMCP_URL_TIMEOUT_MS`), content-type allowlist (`text/*`, `application/json`, `application/xml`), SSRF protection.
+  - SSRF: private/loopback hosts blocked by default (`OMCP_URL_DENY_PRIVATE=1`); allowlist via `OMCP_URL_HOSTS=host1,host2`.
+  - New module: `src/io/sourceReader.ts`.
+
+- **Telemetry footer in `content[]` (F3)** — every successful tool response appends a terse one-line footer as the **last** `content[]` item, visible to the calling frontier LLM:
+  ```
+  [bridge: qwen3:4b B 1240ms in=230 out=85]
+  [bridge: qwen3:4b B 1240ms in=230 out=85 saved~=+210]
+  ```
+  The `saved~=` field appears only when `source_uri` was used. Opt-out via `OMCP_TELEMETRY_FOOTER=0` (telemetry still emitted in `_meta`).
+  - New module: `src/mcp/footer.ts`.
+
+- **Estimated token savings in `_meta` (F5)** — when `source_uri` is used, `dev.ollamamcpbridge/saved_input_tokens_estimate` is emitted alongside `source_uri` and `source_bytes`. Formula: `floor(sourceBytes / 4) − completionTokens`.
+
+- **Explicit `num_ctx` per tier (F1)** — Ollama's runtime default is 4096 regardless of the model's maximum context, causing silent left-truncation on longer inputs. Now set explicitly per tier: Tier B → 8192, Tier C → 16384. Verified by `tests/probe-numctx.mjs` (Tier B: `prompt_eval_count` 6444; Tier C: 6465 — both above the old 4096 cap).
+
+- **New environment variables** — see table in [Environment variables](#environment-variables) section.
+
+### Fixed
+
+- **`classify` `reason` field echoed input verbatim (F4)** — `CLASSIFY_SYSTEM` said "Preserve the source language inside the reason field" without specifying what `reason` should contain; the model correctly interpreted this as "copy the source text." Rewritten to: "write ONE brief sentence explaining your choice, in the same language as the source text." Regression test added to smoke-bridge T4.
+
+- **`summarize-long` mirrored bullet-structured inputs (F4)** — when the source was itself a bullet list, the model would mirror the structure producing 20+ output bullets instead of the promised 3–6. Fixed by adding to `SUMMARIZE_LONG_SYSTEM`: "If the source is itself bullet-structured, collapse related bullets into themes — never mirror the source structure. Never exceed 6 bullets in the output."
+
+- **Summarizer temperature defaulted to Ollama's 0.7 (F4)** — `summarize` and `summarize-long` were missing explicit temperature settings, inheriting Ollama's verbose default. Both now explicitly use 0.2 for deterministic output.
+
+### Tests
+
+- `tests/probe-numctx.mjs` — new script; sends a ~7150-token synthetic input and asserts `prompt_eval_count ≥ 4200` for each tier.
+- `tests/smoke-bridge.mjs` — updated to v0.1.2: T1 footer check (F3), T4 reason regression (F4), T8 new (`source_uri` file:// round-trip, footer, savings estimate). 51 checks total (was 43).
+
+### Environment variables added
+
+| Variable | Default | Description |
+|---|---|---|
+| `OMCP_URL_MAX_BYTES` | `10485760` (10 MB) | Max body size for `http(s)://` reads |
+| `OMCP_URL_TIMEOUT_MS` | `30000` (30 s) | Fetch timeout for `http(s)://` reads |
+| `OMCP_URL_DENY_PRIVATE` | `1` (on) | Block private/loopback hosts (SSRF protection) |
+| `OMCP_URL_HOSTS` | *(unset)* | Comma-separated hostname allowlist for `http(s)://` |
+| `OMCP_TELEMETRY_FOOTER` | `1` (on) | Set to `0` to suppress footer in `content[]` |
+
+---
+
 ## [0.1.1] — 2026-04-23
 
 ### Added

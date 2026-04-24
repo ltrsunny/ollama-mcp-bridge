@@ -5,7 +5,7 @@
 > model. Save tokens. Stay private. Run offline-capable grunt work on your own
 > machine.
 
-**Status: v0.1.1 — alpha.** Five tools available: `summarize`, `summarize-long`,
+**Status: v0.1.2 — alpha.** Five tools available: `summarize`, `summarize-long`,
 `classify`, `extract`, `transform`. The working name will be reconsidered before
 the first public release.
 
@@ -32,18 +32,20 @@ Cursor, Cline, Zed, …). They all share the same security pipeline and emit
 ### `summarize`
 
 ```
-summarize(text: string) → Markdown bullet-point summary
+summarize(text?: string, source_uri?: string, style?: string) → prose summary
 ```
 
 Delegates to **Tier B** (`qwen3:4b`). Best for documents up to ~4 K tokens.
+Either `text` or `source_uri` must be provided (mutually exclusive).
 
 ### `summarize-long`
 
 ```
-summarize-long(text: string) → Markdown bullet-point summary
+summarize-long(text?: string, source_uri?: string, style?: string) → structured summary
 ```
 
-Routes to **Tier C** (`qwen2.5:7b`) for long-context documents.
+Routes to **Tier C** (`qwen2.5:7b`) for long-context documents (1–2 sentence lead + 3–6 bullets).
+Either `text` or `source_uri` must be provided.
 
 ### `classify`
 
@@ -64,7 +66,7 @@ valid member of `categories` via Ollama's `format:` schema feature. When
 ### `extract`
 
 ```
-extract(text: string, schema: JSONSchemaObject) → { data: <schema-typed> } | isError
+extract(text?: string, source_uri?: string, schema: JSONSchemaObject) → { data: <schema-typed> } | isError
 ```
 
 Structured-data extraction against an arbitrary JSON Schema. The bridge
@@ -91,11 +93,38 @@ semantics are not (the model may pick the wrong branch on ambiguous inputs).
 ### `transform`
 
 ```
-transform(text: string, instruction: string) → string
+transform(text?: string, source_uri?: string, instruction: string) → string
 ```
 
-Free-form text transformation. The model applies `instruction` to `text` and
-returns only the result. Language is preserved unless the instruction says otherwise.
+Free-form text transformation. The model applies `instruction` to `text` (or to the
+content at `source_uri`) and returns only the result. Language is preserved unless the
+instruction says otherwise.
+
+### `source_uri` — direct-read input
+
+`summarize`, `summarize-long`, `extract`, and `transform` accept an optional
+`source_uri` parameter instead of `text`. The bridge reads the source directly —
+raw content never enters the frontier's context window — which is the only
+architecture where delegation actually saves frontier tokens.
+
+```
+source_uri: "file:///path/to/document.txt"
+source_uri: "https://example.com/article.html"
+```
+
+**Supported schemes:** `file://` (unrestricted local access) and `http(s)://`
+(size-capped at 10 MB, 30 s timeout, `text/*` / `application/json` /
+`application/xml` content types, SSRF protection for private IPs).
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `OMCP_URL_MAX_BYTES` | `10485760` | Max `http(s)://` body size in bytes |
+| `OMCP_URL_TIMEOUT_MS` | `30000` | Fetch timeout in ms |
+| `OMCP_URL_DENY_PRIVATE` | `1` | Block private/loopback hosts (SSRF) |
+| `OMCP_URL_HOSTS` | *(unset)* | Comma-separated hostname allowlist |
+| `OMCP_TELEMETRY_FOOTER` | `1` | Set `0` to suppress footer in `content[]` |
 
 ---
 
@@ -134,6 +163,22 @@ Every tool response includes a `_meta` record with observability data:
 | `dev.ollamamcpbridge/defender/risk` | When flagged | Tier-1 risk level string |
 | `dev.ollamamcpbridge/schema_validation` | `extract` only | `passed` or `failed` |
 | `dev.ollamamcpbridge/schema_stripped` | `extract` only (when stripped) | List of stripped JSON Pointer paths |
+| `dev.ollamamcpbridge/source_uri` | When `source_uri` used | The URI that was read |
+| `dev.ollamamcpbridge/source_bytes` | When `source_uri` used | Raw byte count of fetched content |
+| `dev.ollamamcpbridge/saved_input_tokens_estimate` | When `source_uri` used | `floor(bytes/4) − completion_tokens` |
+
+### Telemetry footer
+
+Every successful response also appends a one-line footer as the **last `content[]`
+item** — visible to the calling frontier LLM, unlike `_meta`:
+
+```
+[bridge: qwen3:4b B 1240ms in=230 out=85]
+[bridge: qwen3:4b B 1240ms in=230 out=85 saved~=+210]
+```
+
+The `saved~=` field appears when `source_uri` was used. Suppress with
+`OMCP_TELEMETRY_FOOTER=0`.
 
 ---
 
