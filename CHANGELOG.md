@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tier C `num_ctx`: 16384 → 32768** — doubles the supported document size for `summarize-long` from ~12 K words to ~25 K words. Root cause: a real 55 K-token podcast transcript was silently left-truncated to 16 384 tokens at the old setting (`prompt_eval_count` hit num_ctx exactly, and output covered only the final ~30 % of the source). 32 768 still truncates longer documents, but now covers the realistic single-podcast / single-article range on this hardware. KV cache rises from ~1 GB to ~2 GB; measured total ~6.7 GB on a 16 GB Mac — no OOM. **Latency doubles** (102 s → 223 s wall time for a 32 K-token input on qwen2.5:7b Q4_K_M); MCP clients with default request timeouts (often 60 s) will need to raise them. Tracking issue for the real fix: map-reduce chunked summarization.
 - **Honest token-savings messaging in tool descriptions** — reworded `summarize`, `summarize-long`, `extract`, and `transform` descriptions (and their `text` / `source_uri` parameter hints) to state clearly that real frontier-token savings only happen with `source_uri`. Inline `text` does not save tokens when the content is already in the caller's context — "if you can pass it inline, you already paid for it." Previously the tools all claimed "Saves frontier tokens, keeps data local" without qualification, which was misleading for the inline-text path.
 - **`classify` repositioned** — `classify` has no `source_uri` entry point and typically runs on short inputs already in context, so token savings were never a real value prop. Description now leads with **reliability** (grammar-constrained output guaranteeing valid category membership), with data locality as a secondary benefit.
-- No code behavior change; descriptions are what the calling frontier LLM reads when deciding how to invoke the tools.
+- No bridge-code behavior change for the description reword; descriptions are what the calling frontier LLM reads when deciding how to invoke the tools.
+
+### Diagnostics
+
+- **`tests/diag-long-input.mjs`** — new one-off diagnostic (not in CI). Given a long file, probes Tier C at multiple `num_ctx` settings and reports `prompt_eval_count`, latency, and output preview to separate three failure modes: silent truncation, client timeout, and OOM. Used to diagnose the S57 SRT failure and to justify the 16384 → 32768 bump.
 
 ### Infrastructure
 

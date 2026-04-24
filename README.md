@@ -46,8 +46,16 @@ Either `text` or `source_uri` must be provided (mutually exclusive).
 summarize-long(text?: string, source_uri?: string, style?: string) → structured summary
 ```
 
-Routes to **Tier C** (`qwen2.5:7b`) for long-context documents (1–2 sentence lead + 3–6 bullets).
-Either `text` or `source_uri` must be provided.
+Routes to **Tier C** (`qwen2.5:7b`, `num_ctx=32768`) for long-context documents
+(1–2 sentence lead + 3–6 bullets). Either `text` or `source_uri` must be provided.
+
+> **Known limits on 16 GB hardware.** `num_ctx=32768` admits ~25 K words of source
+> in a single call (measured ~6.7 GB total memory use, ~223 s wall time for a full
+> 32 K-token input on qwen2.5:7b Q4_K_M). Documents longer than ~25 K words are
+> still silently left-truncated — Ollama drops the earliest tokens and keeps only
+> the final 32 K, so the resulting summary reflects the tail of the document.
+> MCP clients with request timeouts below ~5 minutes will abandon the call before
+> Ollama returns. Map-reduce chunked summarization is planned to remove both limits.
 
 ### `classify`
 

@@ -38,7 +38,7 @@ export interface TierConfig {
    * 4096 tokens. Set explicitly per tier to prevent data loss.
    *
    * Tier B → 8192 (fast 4B model; fits comfortably on 16 GB Mac)
-   * Tier C → 16384 (7B model; benchmarked VRAM during implementation)
+   * Tier C → 32768 (7B model with ~2 GB KV cache at this size)
    */
   numCtx?: number;
 }
@@ -68,10 +68,14 @@ export const DEFAULT_CONFIG: BridgeConfig = {
       // the larger weights when the long-summarize tool isn't being called.
       model: 'qwen2.5:7b',
       keepAlive: 300,
-      // 16384 tokens: supports ~12 000-word documents. On a 16 GB Mac the
-      // qwen2.5:7b Q4_K_M model uses ~4.7 GB weights + ~1 GB KV-cache at
-      // this context size — total ~5.7 GB, well within budget.
-      numCtx: 16384,
+      // 32768 tokens: supports ~25 000-word documents. On a 16 GB Mac the
+      // qwen2.5:7b Q4_K_M model uses ~4.7 GB weights + ~2 GB KV-cache at
+      // this context size — total ~6.7 GB, measured via diag-long-input.mjs
+      // on 2026-04-24 (no OOM, 223 s wall time for a 32 K-token input +
+      // 100-token output). Callers with MCP request timeouts below ~300 s
+      // will need to raise them; longer documents still truncate silently
+      // (pending map-reduce summarization as a separate feature).
+      numCtx: 32768,
     },
   },
   defaultTier: 'B',
