@@ -51,11 +51,24 @@ Routes to **Tier C** (`qwen2.5:7b`, `num_ctx=32768`) for long-context documents
 
 > **Known limits on 16 GB hardware.** `num_ctx=32768` admits ~25 K words of source
 > in a single call (measured ~6.7 GB total memory use, ~223 s wall time for a full
-> 32 K-token input on qwen2.5:7b Q4_K_M). Documents longer than ~25 K words are
-> still silently left-truncated — Ollama drops the earliest tokens and keeps only
-> the final 32 K, so the resulting summary reflects the tail of the document.
-> MCP clients with request timeouts below ~5 minutes will abandon the call before
-> Ollama returns. Map-reduce chunked summarization is planned to remove both limits.
+> 32 K-token input on qwen2.5:7b Q4_K_M).
+>
+> **Client-side wall.** Claude Code's MCP request timeout is a hard ~60 s that
+> **cannot be extended** via `settings.json` or any documented env var
+> (`MCP_TIMEOUT` affects only server startup — see
+> [anthropics/claude-code #5221](https://github.com/anthropics/claude-code/issues/5221),
+> [#22542](https://github.com/anthropics/claude-code/issues/22542)). From Claude
+> Code, `summarize-long` calls that exceed ~60 s therefore fail regardless of
+> `num_ctx`. Clients with longer timeouts (Claude Desktop, 240 s default) can
+> reach inputs of ~20 K tokens before the wall.
+>
+> **Documents longer than ~25 K words** are also silently left-truncated by
+> Ollama itself — the earliest tokens are dropped, summary reflects only the tail.
+>
+> Both limits are removed by map-reduce chunked summarization — each individual
+> Ollama call stays ≤ 50 s, full input is covered. Prior Art Review complete at
+> [`docs/prior-art/summarize-long-chunked.md`](./docs/prior-art/summarize-long-chunked.md);
+> implementation queued.
 
 ### `classify`
 
