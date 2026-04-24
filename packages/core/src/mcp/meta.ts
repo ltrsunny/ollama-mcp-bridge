@@ -19,6 +19,11 @@
  *   dev.ollamamcpbridge/defender/risk    — Tier-1 risk level (if flagged)
  *   dev.ollamamcpbridge/schema_validation — "passed" | "failed" (F2 only)
  *   dev.ollamamcpbridge/schema_stripped  — string[] of stripped constraints
+ *   dev.ollamamcpbridge/saved_input_tokens_estimate
+ *                                        — rough token savings estimate when
+ *                                          source_uri was used (F5/F2).
+ *                                          Formula: floor(sourceBytes/4) - completionTokens.
+ *                                          Only present when source_uri was supplied.
  */
 
 import type { ChatResult } from '../ollama/client.js';
@@ -52,6 +57,15 @@ export interface MetaInput {
   schemaValidation?: 'passed' | 'failed';
   /** List of JSON schema constraint keys that were stripped before forwarding. */
   schemaStripped?: string[];
+
+  // ── F5 savings estimate (optional) ───────────────────────────────────────
+  /**
+   * Estimated tokens saved by having the bridge read source directly via
+   * source_uri (F2) instead of the frontier passing the full text as a
+   * tool argument. Formula: floor(sourceBytes / 4) − completionTokens.
+   * Only set when source_uri was used; undefined otherwise (footer omits field).
+   */
+  savedInputTokensEstimate?: number;
 }
 
 /**
@@ -83,6 +97,10 @@ export function buildMeta(input: MetaInput): Record<string, unknown> {
   }
   if (input.schemaStripped && input.schemaStripped.length > 0) {
     meta[`${META_NS}/schema_stripped`] = input.schemaStripped;
+  }
+
+  if (input.savedInputTokensEstimate !== undefined) {
+    meta[`${META_NS}/saved_input_tokens_estimate`] = input.savedInputTokensEstimate;
   }
 
   return meta;
