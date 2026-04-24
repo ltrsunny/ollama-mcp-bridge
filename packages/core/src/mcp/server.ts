@@ -11,6 +11,7 @@ import { buildMeta } from './meta.js';
 import { buildFooter } from './footer.js';
 import { BridgeDefense } from './defense.js';
 import { sanitizeSchemaForOllama } from './sanitize.js';
+import { readSource, readSourceOptionsFromEnv } from '../io/sourceReader.js';
 
 export interface BridgeServerOptions {
   ollamaHost?: string;
@@ -98,6 +99,39 @@ async function sendProgress(
   }).catch(() => {/* ignore — progress is advisory */});
 }
 
+// ── Source resolution helper (F2) ────────────────────────────────────────────
+
+type SourceResolved =
+  | { ok: true; text: string; bytes?: number }
+  | { ok: false; message: string };
+
+/**
+ * Resolve the caller's source input: either `text` (inline) or `source_uri`
+ * (file/URL). Exactly one must be provided. Returns a discriminated union so
+ * the handler can short-circuit on failure without throwing.
+ */
+async function resolveSource(
+  text: string | undefined,
+  sourceUri: string | undefined,
+): Promise<SourceResolved> {
+  if (!text && !sourceUri) {
+    return { ok: false, message: 'Either text or source_uri must be provided.' };
+  }
+  if (text && sourceUri) {
+    return { ok: false, message: 'Provide either text or source_uri, not both.' };
+  }
+  if (sourceUri) {
+    try {
+      const opts = readSourceOptionsFromEnv();
+      const r = await readSource(sourceUri, opts);
+      return { ok: true, text: r.text, bytes: r.bytes };
+    } catch (err) {
+      return { ok: false, message: `source_uri read failed: ${(err as Error).message}` };
+    }
+  }
+  return { ok: true, text: text! };
+}
+
 // ── Server builder ──────────────────────────────────────────────────────────
 
 export function buildBridgeServer(
@@ -123,23 +157,33 @@ export function buildBridgeServer(
         'to a local model. Produces plain-prose output. Saves frontier tokens, keeps data local. ' +
         'For documents longer than ~2000 words prefer summarize-long.',
       inputSchema: {
-        text: z.string().min(1).describe('The text to summarize.'),
+        text: z.string().min(1).optional().describe(
+          'The text to summarize. Required if source_uri is not provided.',
+        ),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to read source from instead of text. Supports file:// and http(s)://. ' +
+          'Required if text is not provided. Reading source directly saves frontier tokens.',
+        ),
         style: z.string().optional().describe(
           'Optional style hint, e.g. "one sentence", "three bullet points", "for a non-technical reader".',
         ),
       },
     },
-    async ({ text, style }, extra) => {
+    async ({ text, source_uri, style }, extra) => {
+      const src = await resolveSource(text, source_uri);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
       const tierKey = tierForTool(config, 'summarize');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierCfg.model})`);
       try {
-        let safeText = text;
+        let safeText = src.text;
         let systemPrompt = SUMMARIZE_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
         if (defense) {
-          const dResult = await defense.defend(text, 'summarize');
+          const dResult = await defense.defend(src.text, 'summarize');
           defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
           await sendProgress(extra, 1, 3, `defender passed (risk=${dResult.risk ?? 'low'})`);
           if (!dResult.allowed) {
@@ -163,13 +207,18 @@ export function buildBridgeServer(
           temperature: 0.2,
         });
         const latencyMs = Date.now() - t0;
-        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
+        const savedInputTokensEstimate = src.bytes !== undefined
+          ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
+          : undefined;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, savedTokensEstimate: savedInputTokensEstimate });
+        const meta = buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta, savedInputTokensEstimate });
+        if (source_uri) { meta['dev.ollamamcpbridge/source_uri'] = source_uri; meta['dev.ollamamcpbridge/source_bytes'] = src.bytes; }
         return {
           content: [
             { type: 'text' as const, text: result.text.trim() },
             ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
           ],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
+          _meta: meta,
         };
       } catch (err) {
         return toolCallError(err);
@@ -187,23 +236,33 @@ export function buildBridgeServer(
         'larger local model (Tier C). Produces 1-2 sentence lead + 3-6 bullet points. ' +
         'Higher latency than summarize. Prefer summarize for anything under ~2000 words.',
       inputSchema: {
-        text: z.string().min(1).describe('The document to summarize. Can be several thousand words.'),
+        text: z.string().min(1).optional().describe(
+          'The document to summarize. Can be several thousand words. Required if source_uri is not provided.',
+        ),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to read source from instead of text. Supports file:// and http(s)://. ' +
+          'Required if text is not provided. Especially useful for long documents — reading directly saves frontier tokens.',
+        ),
         style: z.string().optional().describe(
           'Optional style hint. Default is 1-2 sentence lead plus 3-6 bullets.',
         ),
       },
     },
-    async ({ text, style }, extra) => {
+    async ({ text, source_uri, style }, extra) => {
+      const src = await resolveSource(text, source_uri);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
       const tierKey = tierForTool(config, 'summarize-long');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierCfg.model})`);
       try {
-        let safeText = text;
+        let safeText = src.text;
         let systemPrompt = SUMMARIZE_LONG_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
         if (defense) {
-          const dResult = await defense.defend(text, 'summarize-long');
+          const dResult = await defense.defend(src.text, 'summarize-long');
           defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
           await sendProgress(extra, 1, 3, `defender passed (risk=${dResult.risk ?? 'low'})`);
           if (!dResult.allowed) {
@@ -227,13 +286,18 @@ export function buildBridgeServer(
           temperature: 0.2,
         });
         const latencyMs = Date.now() - t0;
-        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
+        const savedInputTokensEstimate = src.bytes !== undefined
+          ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
+          : undefined;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, savedTokensEstimate: savedInputTokensEstimate });
+        const meta = buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta, savedInputTokensEstimate });
+        if (source_uri) { meta['dev.ollamamcpbridge/source_uri'] = source_uri; meta['dev.ollamamcpbridge/source_bytes'] = src.bytes; }
         return {
           content: [
             { type: 'text' as const, text: result.text.trim() },
             ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
           ],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
+          _meta: meta,
         };
       } catch (err) {
         return toolCallError(err);
@@ -336,14 +400,24 @@ export function buildBridgeServer(
         'multipleOf) are automatically stripped and surfaced in _meta.schema_stripped. ' +
         'Saves frontier tokens, keeps data local.',
       inputSchema: {
-        text: z.string().min(1).describe('The source text to extract from.'),
+        text: z.string().min(1).optional().describe(
+          'The source text to extract from. Required if source_uri is not provided.',
+        ),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to read source from instead of text. Supports file:// and http(s)://. ' +
+          'Required if text is not provided.',
+        ),
         schema: z.record(z.string(), z.unknown()).describe(
           'JSON Schema object describing the desired output. Obtain via z.toJSONSchema(yourSchema). ' +
           'Avoid z.email(), z.url(), z.string().regex() — they crash Ollama\'s grammar compiler.',
         ),
       },
     },
-    async ({ text, schema }, extra) => {
+    async ({ text, source_uri, schema }, extra) => {
+      const src = await resolveSource(text, source_uri);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
       const tierKey = tierForTool(config, 'extract');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
@@ -359,11 +433,11 @@ export function buildBridgeServer(
           };
         }
 
-        let safeText = text;
+        let safeText = src.text;
         let systemPrompt = EXTRACT_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
         if (defense) {
-          const dResult = await defense.defend(text, 'extract');
+          const dResult = await defense.defend(src.text, 'extract');
           defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
           await sendProgress(extra, 1, 3, `defender passed (risk=${dResult.risk ?? 'low'})`);
           if (!dResult.allowed) {
@@ -388,21 +462,27 @@ export function buildBridgeServer(
           numPredict: 2048,
         });
         const latencyMs = Date.now() - t0;
-        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
+        const savedInputTokensEstimate = src.bytes !== undefined
+          ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
+          : undefined;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, savedTokensEstimate: savedInputTokensEstimate });
+        const meta = buildMeta({
+          model: tierCfg.model,
+          tier: tierKey,
+          latencyMs,
+          result,
+          defender: defenderMeta,
+          schemaValidation: 'passed',
+          schemaStripped: sanitized.stripped,
+          savedInputTokensEstimate,
+        });
+        if (source_uri) { meta['dev.ollamamcpbridge/source_uri'] = source_uri; meta['dev.ollamamcpbridge/source_bytes'] = src.bytes; }
         return {
           content: [
             { type: 'text' as const, text: result.text },
             ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
           ],
-          _meta: buildMeta({
-            model: tierCfg.model,
-            tier: tierKey,
-            latencyMs,
-            result,
-            defender: defenderMeta,
-            schemaValidation: 'passed',
-            schemaStripped: sanitized.stripped,
-          }),
+          _meta: meta,
         };
       } catch (err) {
         return toolCallError(err);
@@ -421,23 +501,33 @@ export function buildBridgeServer(
         'fix grammar, change tone, convert markdown to plain text, etc. ' +
         'Returns only the transformed text, no commentary. Saves frontier tokens, keeps data local.',
       inputSchema: {
-        text: z.string().min(1).describe('The source text to transform.'),
+        text: z.string().min(1).optional().describe(
+          'The source text to transform. Required if source_uri is not provided.',
+        ),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to read source from instead of text. Supports file:// and http(s)://. ' +
+          'Required if text is not provided.',
+        ),
         instruction: z.string().min(1).describe(
           'The transformation instruction, e.g. "Translate to Spanish", "Fix grammar", "Make it more formal".',
         ),
       },
     },
-    async ({ text, instruction }, extra) => {
+    async ({ text, source_uri, instruction }, extra) => {
+      const src = await resolveSource(text, source_uri);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
       const tierKey = tierForTool(config, 'transform');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierCfg.model})`);
       try {
-        let safeText = text;
+        let safeText = src.text;
         let systemPrompt = TRANSFORM_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
         if (defense) {
-          const dResult = await defense.defend(text, 'transform');
+          const dResult = await defense.defend(src.text, 'transform');
           defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
           await sendProgress(extra, 1, 3, `defender passed (risk=${dResult.risk ?? 'low'})`);
           if (!dResult.allowed) {
@@ -460,13 +550,18 @@ export function buildBridgeServer(
           temperature: 0.3,
         });
         const latencyMs = Date.now() - t0;
-        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
+        const savedInputTokensEstimate = src.bytes !== undefined
+          ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
+          : undefined;
+        const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, savedTokensEstimate: savedInputTokensEstimate });
+        const meta = buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta, savedInputTokensEstimate });
+        if (source_uri) { meta['dev.ollamamcpbridge/source_uri'] = source_uri; meta['dev.ollamamcpbridge/source_bytes'] = src.bytes; }
         return {
           content: [
             { type: 'text' as const, text: result.text.trim() },
             ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
           ],
-          _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta }),
+          _meta: meta,
         };
       } catch (err) {
         return toolCallError(err);
