@@ -36,12 +36,15 @@ const SUMMARIZE_LONG_SYSTEM =
   'You are a careful summarizer of long documents. Produce a structured ' +
   'summary: first 1-2 sentences giving the core claim, then 3-6 short bullet points covering the supporting ' +
   'detail. Preserve the source language. Do not invent facts. If the source is very long, prioritize the ' +
-  'opening, any explicit conclusion, and named entities / numbers.';
+  'opening, any explicit conclusion, and named entities / numbers. ' +
+  'If the source is itself bullet-structured, collapse related bullets into themes — never mirror the source structure. ' +
+  'Never exceed 6 bullets in the output regardless of source length.';
 
 const CLASSIFY_SYSTEM =
   'You are a precise classifier. Given a text and a list of categories, ' +
-  'assign the correct label(s). Reply with JSON matching the schema exactly. ' +
-  'Preserve the source language inside the reason field.';
+  'assign the correct label(s) and reply with JSON matching the schema exactly. ' +
+  'If a reason field is requested, write ONE brief sentence explaining your choice, ' +
+  'in the same language as the source text.';
 
 const EXTRACT_SYSTEM =
   'Extract the requested fields from the user text. Reply with JSON matching ' +
@@ -332,7 +335,7 @@ export function buildBridgeServer(
         if (!sanitized.ok) {
           return {
             isError: true as const,
-            content: [{ type: 'text' as const, text: `Schema rejected: $ref is not supported in v0.1.1 (path: ${sanitized.path}). Resolve all $ref before calling extract.` }],
+            content: [{ type: 'text' as const, text: `Schema rejected: $ref is not supported (path: ${sanitized.path}). Resolve all $ref before calling extract.` }],
             _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result: { promptTokens: 0, completionTokens: 0 } }),
           };
         }
