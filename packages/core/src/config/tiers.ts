@@ -31,6 +31,16 @@ export interface TierConfig {
    * on every call; on-demand tiers use a shorter window (e.g. 300).
    */
   keepAlive?: string | number;
+  /**
+   * Ollama `num_ctx` — context window size in tokens.
+   * Ollama's runtime default is 4096 regardless of the model's maximum.
+   * Without this field the model silently left-truncates inputs that exceed
+   * 4096 tokens. Set explicitly per tier to prevent data loss.
+   *
+   * Tier B → 8192 (fast 4B model; fits comfortably on 16 GB Mac)
+   * Tier C → 16384 (7B model; benchmarked VRAM during implementation)
+   */
+  numCtx?: number;
 }
 
 export interface BridgeConfig {
@@ -49,12 +59,19 @@ export const DEFAULT_CONFIG: BridgeConfig = {
       // when the bridge is quiet. 10 min trades one cold start per idle hour
       // for headroom; tighten via OMCP_TIER_B_KEEPALIVE if the host is roomy.
       keepAlive: '10m',
+      // 8192 tokens: doubles the default 4096 without stressing VRAM on 16 GB
+      // Macs (~0.5 GB additional KV-cache for qwen3:4b at Q4_K_M).
+      numCtx: 8192,
     },
     C: {
       // 5 minutes idle — Tier C is explicitly on-demand; no reason to hold
       // the larger weights when the long-summarize tool isn't being called.
       model: 'qwen2.5:7b',
       keepAlive: 300,
+      // 16384 tokens: supports ~12 000-word documents. On a 16 GB Mac the
+      // qwen2.5:7b Q4_K_M model uses ~4.7 GB weights + ~1 GB KV-cache at
+      // this context size — total ~5.7 GB, well within budget.
+      numCtx: 16384,
     },
   },
   defaultTier: 'B',

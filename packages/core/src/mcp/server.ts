@@ -156,6 +156,7 @@ export function buildBridgeServer(
         const result = await client.chat({
           model: tierCfg.model,
           keepAlive: tierCfg.keepAlive,
+          numCtx: tierCfg.numCtx,
           system: systemPrompt,
           user,
           temperature: 0.2,
@@ -214,6 +215,7 @@ export function buildBridgeServer(
         const result = await client.chat({
           model: tierCfg.model,
           keepAlive: tierCfg.keepAlive,
+          numCtx: tierCfg.numCtx,
           system: systemPrompt,
           user,
           temperature: 0.2,
@@ -287,6 +289,7 @@ export function buildBridgeServer(
         const result = await client.chat({
           model: tierCfg.model,
           keepAlive: tierCfg.keepAlive,
+          numCtx: tierCfg.numCtx,
           system: systemPrompt,
           user: safeText,
           temperature: 0.1, // lower temp for classification
@@ -361,6 +364,7 @@ export function buildBridgeServer(
         const result = await client.chat({
           model: tierCfg.model,
           keepAlive: tierCfg.keepAlive,
+          numCtx: tierCfg.numCtx,
           system: systemPrompt,
           user: safeText,
           temperature: 0.2,
@@ -429,6 +433,7 @@ export function buildBridgeServer(
         const result = await client.chat({
           model: tierCfg.model,
           keepAlive: tierCfg.keepAlive,
+          numCtx: tierCfg.numCtx,
           system: systemPrompt,
           user: `Instruction: ${instruction}\n\nText:\n${safeText}`,
           temperature: 0.3,

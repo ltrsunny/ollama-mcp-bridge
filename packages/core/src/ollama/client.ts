@@ -36,6 +36,13 @@ export interface ChatOptions {
    * `options.num_predict` to Ollama. Default: unlimited.
    */
   numPredict?: number;
+  /**
+   * Context window size in tokens. Passed as `options.num_ctx` to Ollama.
+   * Ollama's runtime default is 4096 regardless of the model's maximum;
+   * inputs exceeding the window are silently left-truncated. Set per tier
+   * to avoid data loss on longer documents.
+   */
+  numCtx?: number;
   signal?: AbortSignal;
 }
 
@@ -106,6 +113,7 @@ export class OllamaClient {
     const ollamaOptions: Record<string, unknown> = {};
     if (opts.temperature !== undefined) ollamaOptions['temperature'] = opts.temperature;
     if (opts.numPredict !== undefined) ollamaOptions['num_predict'] = opts.numPredict;
+    if (opts.numCtx !== undefined) ollamaOptions['num_ctx'] = opts.numCtx;
 
     const res = await this.ollama.chat({
       model: opts.model,
