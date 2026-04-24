@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * smoke-bridge.mjs — v0.1.1 end-to-end smoke test via MCP stdio protocol.
+ * smoke-bridge.mjs — v0.1.2 end-to-end smoke test via MCP stdio protocol.
  *
  * Spawns the bridge (tsx dev-mode) and drives it with raw MCP JSON-RPC messages
  * over stdin/stdout. Tests all 5 tools plus _meta emission, injection defense,
@@ -11,6 +11,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { writeFileSync, rmSync } from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -175,7 +176,13 @@ try {
     const text = firstText(res);
     check('summarize: no <think> tags', !/<think\b|<\/think>/i.test(text), text.slice(0, 200));
     check('summarize: non-empty output', text.length > 10, text.slice(0, 100));
-    console.log(`  ${DIM}${ms}ms — ${text.slice(0, 120)}…${RESET}`);
+    // F3: footer must be last content item
+    const content1 = res.result?.content ?? [];
+    const lastItem1 = content1[content1.length - 1];
+    check('summarize: footer in last content item (F3)',
+      typeof lastItem1?.text === 'string' && lastItem1.text.startsWith('[bridge:'),
+      lastItem1?.text?.slice(0, 120));
+    console.log(`  ${DIM}${ms}ms — footer: ${lastItem1?.text}${RESET}`);
   }
 
   // ── T2: summarize (Chinese) ───────────────────────────────────────────────
@@ -222,16 +229,21 @@ try {
     console.log(`  ${DIM}${ms}ms — labels: ${JSON.stringify(data?.labels)}${RESET}`);
   }
 
-  // classify with explain + Chinese
+  // classify with explain + Chinese — F4 regression: reason must NOT echo input verbatim
   {
+    const classifyInput = '这个产品真的很棒，强烈推荐！';
     const { res, ms } = await callTool('classify', {
-      text: '这个产品真的很棒，强烈推荐！',
+      text: classifyInput,
       categories: ['positive', 'neutral', 'negative'],
       explain: true,
     });
     check('classify+explain: no error', !res.result?.isError, firstText(res));
     const data = parsedJson(res);
     check('classify+explain: has reason string', typeof data?.reason === 'string', data);
+    // F4 regression: old CLASSIFY_SYSTEM bug caused reason to mirror the input
+    check('classify+explain: reason is not verbatim echo of input (F4 regression)',
+      typeof data?.reason === 'string' && data.reason.trim() !== classifyInput.trim(),
+      `reason="${data?.reason}" vs input="${classifyInput}"`);
     console.log(`  ${DIM}${ms}ms — reason: ${data?.reason?.slice(0, 80)}${RESET}`);
   }
 
@@ -334,6 +346,49 @@ try {
         !/(cannot|can't|unable|won't|refuse|deny|against|violat)/i.test(text);
       check('injection (allowed): model did not blindly comply', !complied, text.slice(0, 200));
       console.log(`  ${DIM}(Tier-1 passed — model responded: ${text.slice(0, 100)}…)${RESET}`);
+    }
+  }
+
+  // ── T8: source_uri file:// (F2 + F3 + F5) ───────────────────────────────
+  section('T8 — source_uri file:// (F2 + F3 + F5)');
+
+  {
+    const srcPath = '/tmp/omcp-smoke-source.txt';
+    writeFileSync(srcPath, LONG_TEXT, 'utf-8');
+    try {
+      const { res, ms } = await callTool(
+        'summarize-long',
+        { source_uri: `file://${srcPath}` },
+        300_000,
+      );
+      check('source_uri: no error', !res.result?.isError, firstText(res));
+      const text = firstText(res);
+      check('source_uri: non-empty output', text.length > 10, text.slice(0, 100));
+
+      const meta = res.result?._meta ?? {};
+      check('source_uri: _meta/source_bytes is positive number',
+        typeof meta['dev.ollamamcpbridge/source_bytes'] === 'number' &&
+        meta['dev.ollamamcpbridge/source_bytes'] > 0,
+        meta['dev.ollamamcpbridge/source_bytes']);
+      check('source_uri: _meta/source_uri matches supplied URI',
+        meta['dev.ollamamcpbridge/source_uri'] === `file://${srcPath}`,
+        meta['dev.ollamamcpbridge/source_uri']);
+
+      // F3: last content[] item must be a footer starting with '[bridge:'
+      const content8 = res.result?.content ?? [];
+      const lastItem8 = content8[content8.length - 1];
+      check('source_uri: footer present in last content item (F3)',
+        typeof lastItem8?.text === 'string' && lastItem8.text.startsWith('[bridge:'),
+        lastItem8?.text?.slice(0, 120));
+
+      // F5: footer should contain saved~= when source_uri is used
+      check('source_uri: footer contains saved estimate (F5)',
+        typeof lastItem8?.text === 'string' && lastItem8.text.includes('saved~='),
+        lastItem8?.text?.slice(0, 120));
+
+      console.log(`  ${DIM}${ms}ms — footer: ${lastItem8?.text}${RESET}`);
+    } finally {
+      rmSync(srcPath, { force: true });
     }
   }
 
