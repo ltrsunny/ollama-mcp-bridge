@@ -1,5 +1,7 @@
 # ollama-mcp-bridge (working name)
 
+[![CI](https://github.com/ltrsunny/ollama-mcp-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ltrsunny/ollama-mcp-bridge/actions/workflows/ci.yml)
+
 > Let any MCP-compatible AI assistant — Claude Desktop, Cursor, Cline, Zed, and
 > others — delegate lightweight tasks to a local [Ollama](https://ollama.com)
 > model. Save tokens. Stay private. Run offline-capable grunt work on your own

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Minimal token scope — CI only reads the checkout.
+permissions:
+  contents: read
+
+# A new push to the same ref cancels older in-flight runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: TypeScript build ─────────────────────────────────────────────────
+  # Runs `tsc` (with emit) — serves as both type-check and build verification.
+  # Ollama daemon is NOT available in CI; smoke tests and probe-numctx are
+  # intentionally excluded (see CONTRIBUTING.md).
+  build:
+    name: Build (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript build
+        run: npm run build
+        working-directory: packages/core
+
+  # ── Job 2: Vitest unit tests ────────────────────────────────────────────────
+  # Pure in-process tests only (sanitize.test.ts, 16 cases).
+  # No network, no Ollama, no external services required.
+  unit-test:
+    name: Unit tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+        working-directory: packages/core
