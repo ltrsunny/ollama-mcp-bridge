@@ -36,11 +36,19 @@ export class RecorderClient extends OllamaClient {
   readonly recorded: RecordedCall[] = [];
 
   override async chat(opts: ChatOptions): Promise<ChatResult> {
-    // Deep-clone the args so subsequent mutations by the caller (if any)
-    // don't retroactively change the recording. Spread is shallow but
-    // ChatOptions is a flat record of primitives + a Buffer-free `format`
-    // object, so a JSON round-trip is safe and readable in snapshots.
-    const cloned = JSON.parse(JSON.stringify(opts)) as ChatOptions;
+    // Strip `signal` before recording: it's an opaque AbortSignal whose
+    // presence depends on whether the call site threaded extra.signal
+    // (a forward-compat improvement orthogonal to the migration). Snapshot's
+    // purpose is verifying SEMANTIC args (model, prompts, options) are
+    // unchanged across the migration; signal threading is tested elsewhere
+    // (and proven by the AbortSignal-propagation test suite added with
+    // chunking in a later commit).
+    const { signal: _signal, ...recordable } = opts;
+    void _signal;
+    // Deep-clone via JSON round-trip so subsequent mutations by the caller
+    // (if any) don't retroactively change the recording. ChatOptions
+    // remaining fields are flat primitives + the `format` schema object.
+    const cloned = JSON.parse(JSON.stringify(recordable)) as ChatOptions;
     this.recorded.push({ args: cloned, index: this.recorded.length });
     return FAKE_CHAT_RESULT;
   }

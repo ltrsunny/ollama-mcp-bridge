@@ -12,6 +12,7 @@ import { buildFooter } from './footer.js';
 import { BridgeDefense } from './defense.js';
 import { sanitizeSchemaForOllama } from './sanitize.js';
 import { readSource, readSourceOptionsFromEnv } from '../io/sourceReader.js';
+import { backendForTool } from './backend-factory.js';
 
 export interface BridgeServerOptions {
   ollamaHost?: string;
@@ -202,14 +203,16 @@ export function buildBridgeServer(
         }
         await sendProgress(extra, 2, 3, 'generating…');
         const user = style ? `Style: ${style}\n\nSource:\n${safeText}` : `Source:\n${safeText}`;
-        const result = await client.chat({
-          model: tierCfg.model,
-          keepAlive: tierCfg.keepAlive,
-          numCtx: tierCfg.numCtx,
-          system: systemPrompt,
-          user,
-          temperature: 0.2,
-        });
+        const backend = backendForTool(client, config, 'summarize');
+        const result = await backend.chat(
+          {
+            system: systemPrompt,
+            user,
+            temperature: 0.2,
+            maxInputTokens: tierCfg.numCtx ?? 8192,
+          },
+          extra.signal,
+        );
         const latencyMs = Date.now() - t0;
         const savedInputTokensEstimate = src.bytes !== undefined
           ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
