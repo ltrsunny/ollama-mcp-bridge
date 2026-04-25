@@ -115,7 +115,22 @@ export class OllamaClient {
     if (opts.numPredict !== undefined) ollamaOptions['num_predict'] = opts.numPredict;
     if (opts.numCtx !== undefined) ollamaOptions['num_ctx'] = opts.numCtx;
 
-    const res = await this.ollama.chat({
+    // The `ollama` npm package's public API does not accept a per-request
+    // AbortSignal — only a class-level `abort()` that cancels ALL streamed
+    // requests. To get true per-call cancellation we construct a one-shot
+    // Ollama wrapper with a custom `fetch` that injects the signal. The
+    // wrapper is a pure-setter object (no resource overhead), so doing this
+    // per call is cheap. The shared `this.ollama` is reused when no signal
+    // is provided.
+    const ollamaForCall = opts.signal
+      ? new Ollama({
+          host: this.host,
+          fetch: (input, init) =>
+            globalThis.fetch(input, { ...init, signal: opts.signal }),
+        })
+      : this.ollama;
+
+    const res = await ollamaForCall.chat({
       model: opts.model,
       messages,
       stream: false,
