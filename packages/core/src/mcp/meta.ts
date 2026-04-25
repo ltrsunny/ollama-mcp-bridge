@@ -66,6 +66,21 @@ export interface MetaInput {
    * Only set when source_uri was used; undefined otherwise (footer omits field).
    */
   savedInputTokensEstimate?: number;
+
+  // ── v0.2.0 chunked summarization (optional) ─────────────────────────────
+  /** Stats from a map-reduce chunked summarize job. Set only by `summarize-long-chunked`. */
+  chunked?: {
+    /** Number of chunks the source was split into. 1 means fast-path was taken. */
+    chunksProcessed: number;
+    /** REDUCE pass count (0 for fast-path; ≥1 for normal flow). */
+    reduceDepth: number;
+    /** True when recursion hit MAX_RECURSION_DEPTH and the result is incomplete. */
+    partial: boolean;
+    /** Chunks whose MAP call timed out or errored. */
+    chunksFailed: number;
+    /** REDUCE-pass calls that timed out or errored. */
+    reduceFailed: number;
+  };
 }
 
 /**
@@ -101,6 +116,20 @@ export function buildMeta(input: MetaInput): Record<string, unknown> {
 
   if (input.savedInputTokensEstimate !== undefined) {
     meta[`${META_NS}/saved_input_tokens_estimate`] = input.savedInputTokensEstimate;
+  }
+
+  if (input.chunked) {
+    meta[`${META_NS}/chunks_processed`] = input.chunked.chunksProcessed;
+    meta[`${META_NS}/reduce_depth`] = input.chunked.reduceDepth;
+    if (input.chunked.partial) {
+      meta[`${META_NS}/partial`] = true;
+    }
+    if (input.chunked.chunksFailed > 0) {
+      meta[`${META_NS}/chunks_failed`] = input.chunked.chunksFailed;
+    }
+    if (input.chunked.reduceFailed > 0) {
+      meta[`${META_NS}/reduce_failed`] = input.chunked.reduceFailed;
+    }
   }
 
   return meta;

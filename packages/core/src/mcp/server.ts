@@ -13,6 +13,7 @@ import { BridgeDefense } from './defense.js';
 import { sanitizeSchemaForOllama } from './sanitize.js';
 import { readSource, readSourceOptionsFromEnv } from '../io/sourceReader.js';
 import { backendForTool } from './backend-factory.js';
+import { chunkedSummarize } from '../chunking/map-reduce.js';
 
 export interface BridgeServerOptions {
   ollamaHost?: string;
@@ -72,6 +73,19 @@ function toolCallError(err: unknown) {
     isError: true as const,
     content: [{ type: 'text' as const, text: msg }],
   };
+}
+
+/**
+ * Parse a positive integer env var. Returns undefined when the var is unset
+ * or its value is not a positive integer (so the caller falls back to its
+ * own default rather than silently using a malformed value).
+ */
+function parseEnvInt(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return undefined;
+  return n;
 }
 
 /**
@@ -305,6 +319,134 @@ export function buildBridgeServer(
         const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens, savedTokensEstimate: savedInputTokensEstimate });
         const meta = buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs, result, defender: defenderMeta, savedInputTokensEstimate });
         if (source_uri) { meta['dev.ollamamcpbridge/source_uri'] = source_uri; meta['dev.ollamamcpbridge/source_bytes'] = src.bytes; }
+        return {
+          content: [
+            { type: 'text' as const, text: result.text.trim() },
+            ...(footerText ? [{ type: 'text' as const, text: footerText }] : []),
+          ],
+          _meta: meta,
+        };
+      } catch (err) {
+        return toolCallError(err);
+      }
+    },
+  );
+
+  // ── summarize-long-chunked (v0.2.0) ──────────────────────────────────────
+  server.registerTool(
+    'summarize-long-chunked',
+    {
+      title: 'Summarize long documents via map-reduce chunking (Tier C)',
+      description:
+        'DELEGATION GUIDANCE: delegate very long documents (anything past Tier C\'s ~25 000-word ceiling on a single call, e.g. full podcasts, long reports, multi-chapter excerpts). Splits the source into overlapping ~2 000-token chunks, summarizes each in parallel, then recursively combines the chunk summaries into one coherent output. Each individual model call stays under ~50 s so the tool returns within Claude Code\'s ~60 s MCP request timeout window. ' +
+        'WHEN TO USE: prefer summarize-long for inputs that fit in one Tier C call (~25 K words) — it has lower latency. Use summarize-long-chunked when (a) you don\'t know the input length and want the safe-superset behavior, or (b) the input is known to exceed ~25 K words. ' +
+        'TOKEN SAVINGS: real frontier-token savings require source_uri — the bridge reads the source directly so it never enters your context. Inline `text` saves nothing if the content is already in your context.',
+      inputSchema: {
+        text: z.string().min(1).optional().describe(
+          'The document to summarize. Required if source_uri is not provided. ' +
+          'Saves no frontier tokens if already in your context — source_uri is strongly preferred.',
+        ),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to read source from instead of text. Supports file:// and http(s)://. ' +
+          'Required if text is not provided. Strongly preferred for long content — the only path that actually saves frontier tokens.',
+        ),
+        style: z.string().optional().describe(
+          'Optional style hint forwarded to the final reduce prompt. Default is 1-2 sentence lead plus 3-6 bullets.',
+        ),
+        max_chunks: z.number().int().min(1).optional().describe(
+          'Safety cap on chunk count. Default 100. Job errors out above this — raise OMCP_CHUNK_SIZE or split the source instead of raising this.',
+        ),
+      },
+    },
+    async ({ text, source_uri, style, max_chunks }, extra) => {
+      const src = await resolveSource(text, source_uri);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
+      const tierKey = tierForTool(config, 'summarize-long-chunked');
+      const tierCfg = config.tiers[tierKey];
+      const t0 = Date.now();
+      await sendProgress(extra, 0, 5, `routing to Tier ${tierKey} (${tierCfg.model})`);
+      try {
+        let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
+        if (defense) {
+          const dResult = await defense.defend(src.text, 'summarize-long-chunked');
+          defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
+          await sendProgress(extra, 1, 5, `defender passed (risk=${dResult.risk ?? 'low'})`);
+          if (!dResult.allowed) {
+            return {
+              isError: true as const,
+              content: [{ type: 'text' as const, text: `Prompt injection detected (risk=${dResult.risk}). Request blocked.` }],
+              _meta: buildMeta({ model: tierCfg.model, tier: tierKey, latencyMs: Date.now() - t0, result: { promptTokens: 0, completionTokens: 0 }, defender: defenderMeta }),
+            };
+          }
+          // Defender's allowed-vs-blocked decision is honored. We do NOT
+          // forward `dResult.wrappedText` (Microsoft Spotlighting wrapping)
+          // into the chunker because chunk boundaries would split the
+          // unique-delimiter wrapping, defeating the spotlighting model.
+          // The Tier-1 regex classifier (always-on) and NFKC normalization
+          // already ran on the full source and pass/fail the call before
+          // any chunking; we accept losing spotlighting on the per-chunk
+          // model calls as a v0.2.0 trade-off.
+        }
+        const chunkSize = parseEnvInt('OMCP_CHUNK_SIZE');
+        const chunkOverlap = parseEnvInt('OMCP_CHUNK_OVERLAP');
+        const concurrency = parseEnvInt('OMCP_CHUNK_CONCURRENCY');
+        const backend = backendForTool(client, config, 'summarize-long-chunked');
+        const result = await chunkedSummarize({
+          source: src.text,
+          style,
+          maxChunks: max_chunks,
+          backend,
+          maxInputTokens: tierCfg.numCtx ?? 8192,
+          signal: extra.signal,
+          chunkSize,
+          chunkOverlap,
+          concurrency,
+          onProgress: async (msg, current, total) => {
+            // Map chunked progress (variable phases) onto the 5-step bar.
+            // Phases: 0=routing, 1=defender, 2=chunking-and-MAP, 3=REDUCE, 4=done.
+            // We pass current/total straight through; the message text
+            // carries the phase context.
+            await sendProgress(extra, Math.min(current, 4), Math.max(total, 5), msg);
+          },
+        });
+        const latencyMs = Date.now() - t0;
+        const savedInputTokensEstimate = src.bytes !== undefined
+          ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
+          : undefined;
+        const footerText = buildFooter({
+          model: tierCfg.model,
+          tier: tierKey,
+          latencyMs,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
+          savedTokensEstimate: savedInputTokensEstimate,
+          chunks: result.chunksProcessed,
+          partial: result.partial,
+        });
+        const meta = buildMeta({
+          model: tierCfg.model,
+          tier: tierKey,
+          latencyMs,
+          result: {
+            promptTokens: result.promptTokens,
+            completionTokens: result.completionTokens,
+          },
+          defender: defenderMeta,
+          savedInputTokensEstimate,
+          chunked: {
+            chunksProcessed: result.chunksProcessed,
+            reduceDepth: result.reduceDepth,
+            partial: result.partial,
+            chunksFailed: result.chunksFailed,
+            reduceFailed: result.reduceFailed,
+          },
+        });
+        if (source_uri) {
+          meta['dev.ollamamcpbridge/source_uri'] = source_uri;
+          meta['dev.ollamamcpbridge/source_bytes'] = src.bytes;
+        }
         return {
           content: [
             { type: 'text' as const, text: result.text.trim() },

@@ -82,6 +82,9 @@ export const DEFAULT_CONFIG: BridgeConfig = {
   toolTierMap: {
     summarize: 'B',
     'summarize-long': 'C',
+    // Same Tier C as summarize-long — chunked variant uses the same model,
+    // just adds map-reduce orchestration on top.
+    'summarize-long-chunked': 'C',
   },
 };
 

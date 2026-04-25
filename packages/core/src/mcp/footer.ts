@@ -21,20 +21,40 @@ export interface FooterOptions {
   completionTokens: number;
   /** Only present when source_uri was used (F2). Omit for text-arg calls. */
   savedTokensEstimate?: number;
+  /**
+   * Only present for `summarize-long-chunked` (v0.2.0+). Number of chunks
+   * the source was split into in the MAP phase. 1 means the fast-path was
+   * taken (no chunking).
+   */
+  chunks?: number;
+  /** Only set true when `summarize-long-chunked` returned a partial result. */
+  partial?: boolean;
 }
 
 /**
  * Build the footer string. Returns empty string when OMCP_TELEMETRY_FOOTER=0.
+ *
+ * Format examples:
+ *   [bridge: qwen3:4b B 1240ms in=230 out=85]
+ *   [bridge: qwen2.5:7b C 11240ms in=519 out=136 saved~=+220]
+ *   [bridge: qwen2.5:7b C 187340ms in=12500 out=1200 chunks=24]
+ *   [bridge: qwen2.5:7b C 187340ms in=12500 out=1200 chunks=24 partial]
  */
 export function buildFooter(opts: FooterOptions): string {
   if (process.env['OMCP_TELEMETRY_FOOTER'] === '0') return '';
 
-  const base =
+  let s =
     `[bridge: ${opts.model} ${opts.tier} ${opts.latencyMs}ms` +
     ` in=${opts.promptTokens} out=${opts.completionTokens}`;
 
-  if (opts.savedTokensEstimate !== undefined && opts.savedTokensEstimate > 0) {
-    return base + ` saved~=+${opts.savedTokensEstimate}]`;
+  if (opts.chunks !== undefined) {
+    s += ` chunks=${opts.chunks}`;
   }
-  return base + ']';
+  if (opts.savedTokensEstimate !== undefined && opts.savedTokensEstimate > 0) {
+    s += ` saved~=+${opts.savedTokensEstimate}`;
+  }
+  if (opts.partial) {
+    s += ` partial`;
+  }
+  return s + ']';
 }
