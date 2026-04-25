@@ -63,10 +63,15 @@ export class OllamaBackend implements LlmBackend {
   }
 
   async chat(opts: ChatOptions, signal?: AbortSignal): Promise<ChatResult> {
+    // Forward `think` only when the backend was constructed with an explicit
+    // value. OllamaClient defaults to `false` internally, so omitting the
+    // field reaches the same Ollama API call. Conditional spread keeps
+    // post-migration call args byte-identical to pre-migration callsites
+    // (which never set `think`) — important for migration-snapshot.test.ts.
     return this.client.chat({
       model: this.opts.modelTag,
       keepAlive: this.opts.keepAlive,
-      think: this.opts.think ?? false,
+      ...(this.opts.think !== undefined && { think: this.opts.think }),
       numCtx: opts.maxInputTokens,
       numPredict: opts.maxOutputTokens,
       system: opts.system,

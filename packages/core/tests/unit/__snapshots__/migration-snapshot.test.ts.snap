@@ -1,0 +1,178 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`migration snapshot — pre-migration baseline > classify: allow_multiple + explain 1`] = `
+{
+  "format": {
+    "properties": {
+      "labels": {
+        "items": {
+          "enum": [
+            "bug",
+            "feature",
+            "docs",
+            "security",
+          ],
+        },
+        "minItems": 1,
+        "type": "array",
+      },
+      "reason": {
+        "type": "string",
+      },
+    },
+    "required": [
+      "labels",
+      "reason",
+    ],
+    "type": "object",
+  },
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "system": "You are a precise classifier. Given a text and a list of categories, assign the correct label(s) and reply with JSON matching the schema exactly. If a reason field is requested, write ONE brief sentence explaining your choice, in the same language as the source text.",
+  "temperature": 0.1,
+  "user": "A bug report covering login failures and missing validation.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > classify: single label, no explain 1`] = `
+{
+  "format": {
+    "properties": {
+      "labels": {
+        "items": {
+          "enum": [
+            "positive",
+            "negative",
+            "neutral",
+          ],
+        },
+        "maxItems": 1,
+        "minItems": 1,
+        "type": "array",
+      },
+    },
+    "required": [
+      "labels",
+    ],
+    "type": "object",
+  },
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "system": "You are a precise classifier. Given a text and a list of categories, assign the correct label(s) and reply with JSON matching the schema exactly. If a reason field is requested, write ONE brief sentence explaining your choice, in the same language as the source text.",
+  "temperature": 0.1,
+  "user": "I love this product, it works great.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > extract: flat schema with required fields 1`] = `
+{
+  "format": {
+    "properties": {
+      "customer_name": {
+        "type": "string",
+      },
+      "order_id": {
+        "type": "string",
+      },
+      "total_usd": {
+        "type": "number",
+      },
+    },
+    "required": [
+      "order_id",
+      "customer_name",
+      "total_usd",
+    ],
+    "type": "object",
+  },
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "numPredict": 2048,
+  "system": "Extract the requested fields from the user text. Reply with JSON matching the schema exactly. Preserve source language inside string values. SCHEMA GUIDANCE: prefer z.discriminatedUnion over bare z.union when branches overlap on output shape — structural grammar enforcement does not guarantee the model picks the intended branch for bare unions.",
+  "temperature": 0.2,
+  "user": "Order #4521 from Alice Chen, total $89.50.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > extract: schema with constraints that get stripped (pattern, format:email) 1`] = `
+{
+  "format": {
+    "properties": {
+      "email": {
+        "type": "string",
+      },
+      "name": {
+        "minLength": 1,
+        "type": "string",
+      },
+    },
+    "required": [
+      "name",
+      "email",
+    ],
+    "type": "object",
+  },
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "numPredict": 2048,
+  "system": "Extract the requested fields from the user text. Reply with JSON matching the schema exactly. Preserve source language inside string values. SCHEMA GUIDANCE: prefer z.discriminatedUnion over bare z.union when branches overlap on output shape — structural grammar enforcement does not guarantee the model picks the intended branch for bare unions.",
+  "temperature": 0.2,
+  "user": "Contact Alice at alice@example.com.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > summarize: text + style hint 1`] = `
+{
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "system": "You are a precise summarizer. Produce a single-paragraph summary in plain prose. Do not editorialize. Do not add information not in the source. Match the language of the source text. If a style hint is provided, honor it (e.g. "one sentence", "for a non-technical reader", "bullet points").",
+  "temperature": 0.2,
+  "user": "Style: one sentence
+
+Source:
+A short paragraph about cats sleeping in the sun.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > summarize: text only, no style 1`] = `
+{
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "system": "You are a precise summarizer. Produce a single-paragraph summary in plain prose. Do not editorialize. Do not add information not in the source. Match the language of the source text. If a style hint is provided, honor it (e.g. "one sentence", "for a non-technical reader", "bullet points").",
+  "temperature": 0.2,
+  "user": "Source:
+A short paragraph about cats sleeping in the sun.",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > summarize-long: text only 1`] = `
+{
+  "keepAlive": 300,
+  "model": "qwen2.5:7b",
+  "numCtx": 32768,
+  "system": "You are a careful summarizer of long documents. Produce a structured summary: first 1-2 sentences giving the core claim, then 3-6 short bullet points covering the supporting detail. Preserve the source language. Do not invent facts. If the source is very long, prioritize the opening, any explicit conclusion, and named entities / numbers. If the source is itself bullet-structured, collapse related bullets into themes — never mirror the source structure. Never exceed 6 bullets in the output regardless of source length.",
+  "temperature": 0.2,
+  "user": "Source:
+A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. A document. ",
+}
+`;
+
+exports[`migration snapshot — pre-migration baseline > transform: instruction + text 1`] = `
+{
+  "keepAlive": "10m",
+  "model": "qwen3:4b-instruct-2507-q4_K_M",
+  "numCtx": 8192,
+  "system": "Apply the instruction to the text. Return ONLY the transformed text, with no commentary, no preamble, no explanation. Preserve the source language unless the instruction explicitly says otherwise.",
+  "temperature": 0.3,
+  "user": "Instruction: Translate to natural English prose, one sentence
+
+Text:
+cd /tmp && rm -rf foo",
+}
+`;
