@@ -110,6 +110,18 @@ function waitForResponse(rl, id, timeoutMs = 120_000) {
 const proc = spawn('npx', ['tsx', 'bin/cli.ts', 'serve'], {
   cwd: CORE_ROOT,
   stdio: ['pipe', 'pipe', 'inherit'],
+  // T9 (summarize-long-chunked) needs an input that exceeds Tier C's
+  // ~32 K-token fast-path budget. We feed LONG_TEXT × 100 (~29 K tokens),
+  // which clears the fast-path threshold and forces real chunking. With
+  // OMCP_CHUNK_SIZE=4000 (instead of the 2000 default), the fixture
+  // chunks into ~9 pieces rather than ~17 — fewer total backend calls,
+  // smoke wall-time stays under ~3 min on a 16 GB Mac. These env vars
+  // affect ONLY the chunked tool; T1-T8 use the unchanged tools.
+  env: {
+    ...process.env,
+    OMCP_CHUNK_SIZE: '4000',
+    OMCP_CHUNK_OVERLAP: '200',
+  },
 });
 
 const rl = readline.createInterface({ input: proc.stdout });
@@ -390,6 +402,59 @@ try {
     } finally {
       rmSync(srcPath, { force: true });
     }
+  }
+
+  // ── T9: summarize-long-chunked (v0.2.0) ─────────────────────────────────
+  section('T9 — summarize-long-chunked (chunked map-reduce)');
+
+  {
+    // LONG_TEXT × 100 ≈ 117 KB ≈ ~29 K tokens — clears Tier C's
+    // ~32 K-token fast-path threshold so real chunking happens. With
+    // OMCP_CHUNK_SIZE=4000 in the spawn env, splits into ~9 chunks.
+    const longInput = LONG_TEXT.repeat(100);
+    const { res, ms } = await callTool(
+      'summarize-long-chunked',
+      { text: longInput, style: 'one-sentence lead and three bullets' },
+      600_000, // 10 min ceiling — multi-chunk MAP + reduce on Tier C
+    );
+    check('chunked: no error', !res.result?.isError, firstText(res));
+    const text = firstText(res);
+    check('chunked: non-empty output', text.length > 20, text.slice(0, 100));
+
+    const meta = res.result?._meta ?? {};
+    check(
+      'chunked: _meta/tier is C',
+      meta['dev.ollamamcpbridge/tier'] === 'C',
+      meta['dev.ollamamcpbridge/tier'],
+    );
+    check(
+      'chunked: _meta/chunks_processed > 1 (real chunking, not fast-path)',
+      typeof meta['dev.ollamamcpbridge/chunks_processed'] === 'number' &&
+        (meta['dev.ollamamcpbridge/chunks_processed']) > 1,
+      meta['dev.ollamamcpbridge/chunks_processed'],
+    );
+    check(
+      'chunked: _meta/reduce_depth >= 1',
+      typeof meta['dev.ollamamcpbridge/reduce_depth'] === 'number' &&
+        (meta['dev.ollamamcpbridge/reduce_depth']) >= 1,
+      meta['dev.ollamamcpbridge/reduce_depth'],
+    );
+
+    // Footer must be the last content[] item and contain `chunks=N`
+    const content9 = res.result?.content ?? [];
+    const lastItem9 = content9[content9.length - 1];
+    check(
+      'chunked: footer present in last content item',
+      typeof lastItem9?.text === 'string' && lastItem9.text.startsWith('[bridge:'),
+      lastItem9?.text?.slice(0, 120),
+    );
+    check(
+      'chunked: footer contains chunks=N',
+      typeof lastItem9?.text === 'string' && /chunks=\d+/.test(lastItem9.text),
+      lastItem9?.text?.slice(0, 120),
+    );
+
+    console.log(`  ${DIM}${ms}ms — footer: ${lastItem9?.text}${RESET}`);
   }
 
 } catch (err) {
