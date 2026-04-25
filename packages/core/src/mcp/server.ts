@@ -288,14 +288,16 @@ export function buildBridgeServer(
         }
         await sendProgress(extra, 2, 3, 'generating…');
         const user = style ? `Style override: ${style}\n\nSource:\n${safeText}` : `Source:\n${safeText}`;
-        const result = await client.chat({
-          model: tierCfg.model,
-          keepAlive: tierCfg.keepAlive,
-          numCtx: tierCfg.numCtx,
-          system: systemPrompt,
-          user,
-          temperature: 0.2,
-        });
+        const backend = backendForTool(client, config, 'summarize-long');
+        const result = await backend.chat(
+          {
+            system: systemPrompt,
+            user,
+            temperature: 0.2,
+            maxInputTokens: tierCfg.numCtx ?? 8192,
+          },
+          extra.signal,
+        );
         const latencyMs = Date.now() - t0;
         const savedInputTokensEstimate = src.bytes !== undefined
           ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
@@ -376,15 +378,17 @@ export function buildBridgeServer(
           : { type: 'object', properties: { labels: labelsSchema }, required: ['labels'] };
 
         await sendProgress(extra, 2, 3, 'generating…');
-        const result = await client.chat({
-          model: tierCfg.model,
-          keepAlive: tierCfg.keepAlive,
-          numCtx: tierCfg.numCtx,
-          system: systemPrompt,
-          user: safeText,
-          temperature: 0.1, // lower temp for classification
-          format: formatSchema,
-        });
+        const backend = backendForTool(client, config, 'classify');
+        const result = await backend.chat(
+          {
+            system: systemPrompt,
+            user: safeText,
+            temperature: 0.1, // lower temp for classification
+            maxInputTokens: tierCfg.numCtx ?? 8192,
+            format: formatSchema,
+          },
+          extra.signal,
+        );
         const latencyMs = Date.now() - t0;
         const footerText = buildFooter({ model: tierCfg.model, tier: tierKey, latencyMs, promptTokens: result.promptTokens, completionTokens: result.completionTokens });
         return {
@@ -470,16 +474,18 @@ export function buildBridgeServer(
           systemPrompt = dResult.systemPrefix + '\n\n' + EXTRACT_SYSTEM;
         }
         await sendProgress(extra, 2, 3, 'generating…');
-        const result = await client.chat({
-          model: tierCfg.model,
-          keepAlive: tierCfg.keepAlive,
-          numCtx: tierCfg.numCtx,
-          system: systemPrompt,
-          user: safeText,
-          temperature: 0.2,
-          format: sanitized.schema,
-          numPredict: 2048,
-        });
+        const backend = backendForTool(client, config, 'extract');
+        const result = await backend.chat(
+          {
+            system: systemPrompt,
+            user: safeText,
+            temperature: 0.2,
+            maxInputTokens: tierCfg.numCtx ?? 8192,
+            format: sanitized.schema,
+            maxOutputTokens: 2048,
+          },
+          extra.signal,
+        );
         const latencyMs = Date.now() - t0;
         const savedInputTokensEstimate = src.bytes !== undefined
           ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
@@ -564,14 +570,16 @@ export function buildBridgeServer(
           systemPrompt = dResult.systemPrefix + '\n\n' + TRANSFORM_SYSTEM;
         }
         await sendProgress(extra, 2, 3, 'generating…');
-        const result = await client.chat({
-          model: tierCfg.model,
-          keepAlive: tierCfg.keepAlive,
-          numCtx: tierCfg.numCtx,
-          system: systemPrompt,
-          user: `Instruction: ${instruction}\n\nText:\n${safeText}`,
-          temperature: 0.3,
-        });
+        const backend = backendForTool(client, config, 'transform');
+        const result = await backend.chat(
+          {
+            system: systemPrompt,
+            user: `Instruction: ${instruction}\n\nText:\n${safeText}`,
+            temperature: 0.3,
+            maxInputTokens: tierCfg.numCtx ?? 8192,
+          },
+          extra.signal,
+        );
         const latencyMs = Date.now() - t0;
         const savedInputTokensEstimate = src.bytes !== undefined
           ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
