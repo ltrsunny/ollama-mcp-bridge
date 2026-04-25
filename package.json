@@ -14,5 +14,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "clean": "npm run clean --workspaces --if-present"
+  },
+  "overrides": {
+    "uuid": "^14.0.0"
   }
 }
