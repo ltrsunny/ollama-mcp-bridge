@@ -1,6 +1,6 @@
 {
   "name": "ollama-mcp-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Universal MCP server that bridges any MCP client (Claude Desktop, Cursor, Cline, Zed, etc.) to a local Ollama instance, so the assistant can delegate lightweight tasks to a local model and save tokens.",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,7 +20,8 @@
     "dev": "tsx bin/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build && npm test && node tests/check-version-sync.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

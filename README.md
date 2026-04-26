@@ -7,9 +7,9 @@
 > model. Save tokens. Stay private. Run offline-capable grunt work on your own
 > machine.
 
-**Status: v0.1.2 — alpha.** Five tools available: `summarize`, `summarize-long`,
-`classify`, `extract`, `transform`. The working name will be reconsidered before
-the first public release.
+**Status: v0.2.0 — alpha.** Six tools available: `summarize`, `summarize-long`,
+`summarize-long-chunked`, `classify`, `extract`, `transform`. The working name
+will be reconsidered before the first public release.
 
 ## Layout
 
@@ -27,7 +27,7 @@ logic lives in a framework-agnostic package.
 
 ## Tools
 
-All five tools are available over any MCP-compatible client (Claude Desktop,
+All six tools are available over any MCP-compatible client (Claude Desktop,
 Cursor, Cline, Zed, …). They all share the same security pipeline and emit
 `_meta` telemetry on every response.
 
@@ -49,26 +49,51 @@ summarize-long(text?: string, source_uri?: string, style?: string) → structure
 Routes to **Tier C** (`qwen2.5:7b`, `num_ctx=32768`) for long-context documents
 (1–2 sentence lead + 3–6 bullets). Either `text` or `source_uri` must be provided.
 
-> **Known limits on 16 GB hardware.** `num_ctx=32768` admits ~25 K words of source
-> in a single call (measured ~6.7 GB total memory use, ~223 s wall time for a full
-> 32 K-token input on qwen2.5:7b Q4_K_M).
->
-> **Client-side wall.** Claude Code's MCP request timeout is a hard ~60 s that
-> **cannot be extended** via `settings.json` or any documented env var
-> (`MCP_TIMEOUT` affects only server startup — see
+> **`num_ctx=32768`** admits ~25 K words of source in a single call (measured
+> ~6.7 GB total memory use, ~223 s wall time for a full 32 K-token input on
+> qwen2.5:7b Q4_K_M on a 16 GB Mac). Documents longer than ~25 K words are
+> silently left-truncated by Ollama itself — use `summarize-long-chunked`
+> for those.
+
+### `summarize-long-chunked`
+
+```
+summarize-long-chunked(
+  text?:        string,
+  source_uri?:  string,
+  style?:       string,
+  max_chunks?:  number = 100,
+) → coherent final summary
+```
+
+Map-reduce chunked summarization for documents that exceed Tier C's single-call
+ceiling (~25 K words). Splits the source into overlapping chunks (default
+2 000 tokens, configurable), summarizes each in parallel via `p-limit`, then
+recursively combines chunk summaries until one bucket fits a single REDUCE call.
+
+- Same Tier C model as `summarize-long`.
+- Per-call soft timeout 50 s; chained `AbortSignal` per chunk so client
+  disconnects propagate cleanly without leaking work.
+- Recursion depth ≤ 3 covers up to ~200 K-token inputs; beyond that returns
+  `partial: true` with the first bucket reduced.
+- **Fast-path:** if the source fits Tier C in one call, the tool runs as a
+  single equivalent call (no chunking tax). Strict superset of `summarize-long`.
+
+> **Client-timeout reality.** Claude Code's MCP request timeout is a hard ~60 s
+> that **cannot be extended** via `settings.json` or any documented env var
+> (`MCP_TIMEOUT` controls only server startup — see
 > [anthropics/claude-code #5221](https://github.com/anthropics/claude-code/issues/5221),
-> [#22542](https://github.com/anthropics/claude-code/issues/22542)). From Claude
-> Code, `summarize-long` calls that exceed ~60 s therefore fail regardless of
-> `num_ctx`. Clients with longer timeouts (Claude Desktop, 240 s default) can
-> reach inputs of ~20 K tokens before the wall.
+> [#22542](https://github.com/anthropics/claude-code/issues/22542)). The
+> chunking work itself takes minutes on a 16 GB Mac, so from Claude Code this
+> tool is useful in **fast-path mode only** — for documents up to ~12-15 KB
+> Chinese / ~25 KB English. Larger documents force the full chunking path,
+> exceeding 60 s of total wall time and timing out the MCP request even though
+> each individual Ollama call stays under the per-call 50 s budget.
 >
-> **Documents longer than ~25 K words** are also silently left-truncated by
-> Ollama itself — the earliest tokens are dropped, summary reflects only the tail.
->
-> Both limits are removed by map-reduce chunked summarization — each individual
-> Ollama call stays ≤ 50 s, full input is covered. Prior Art Review complete at
-> [`docs/prior-art/summarize-long-chunked.md`](./docs/prior-art/summarize-long-chunked.md);
-> implementation queued.
+> The chunked path **is reachable from clients with longer timeouts** (Claude
+> Desktop: 240 s default; custom integrations: configurable). The smoke suite
+> (`tests/smoke-bridge.mjs`) exercises it end-to-end with a 600 s harness
+> timeout.
 
 ### `classify`
 
@@ -148,6 +173,10 @@ source_uri: "https://example.com/article.html"
 | `OMCP_URL_DENY_PRIVATE` | `1` | Block private/loopback hosts (SSRF) |
 | `OMCP_URL_HOSTS` | *(unset)* | Comma-separated hostname allowlist |
 | `OMCP_TELEMETRY_FOOTER` | `1` | Set `0` to suppress footer in `content[]` |
+| `OMCP_CHUNK_SIZE` | `2000` | `summarize-long-chunked` target tokens per chunk |
+| `OMCP_CHUNK_OVERLAP` | `200` | `summarize-long-chunked` overlap between adjacent chunks |
+| `OMCP_CHUNK_CONCURRENCY` | `2` | `summarize-long-chunked` MAP fan-out cap (Ollama serializes on Metal so >2 mostly adds queueing) |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama daemon URL — same env var Ollama itself uses; `--host` flag overrides |
 
 ---
 

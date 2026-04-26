@@ -7,26 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] — 2026-04-25
+
+### Theme
+
+**"Backend-agnostic + chunked"** — introduces a neutral `LlmBackend` interface so v0.3.0 can swap Ollama for llama.cpp without rewriting tool handlers, plus a new `summarize-long-chunked` tool that handles documents past Tier C's single-call ceiling via map-reduce. Bundles the v0.1.3-ish docs / CI / config improvements that accumulated since 0.1.2.
+
+### Added
+
+- **`LlmBackend` interface (`src/llm/backend.ts`)** — narrow neutral contract: `chat(opts, signal?)`, `countTokens(text)`, `ping()`. Anything Ollama-specific (`keep_alive`, the qwen3 `think` flag, native option names) lives on the concrete `OllamaBackend` class. Field renames at the boundary: `numCtx` → `maxInputTokens`, `numPredict` → `maxOutputTokens`. v0.3.0's `LlamaCppBackend` will be a parallel implementation.
+  - `chat()` accepts an `AbortSignal` so chunked jobs can cancel cleanly when the MCP client disconnects (the SDK already passes a client-cancellation signal as `extra.signal`, verified at `@modelcontextprotocol/sdk/.../shared/protocol.d.ts:177`).
+  - `countTokens()` lives on the interface so v0.3.0's llama-server `/tokenize` endpoint can replace js-tiktoken's proxy without a chunker refactor.
+
+- **`OllamaBackend` (`src/llm/ollama-backend.ts`)** — implements `LlmBackend` against the existing `OllamaClient`. `countTokens` uses `js-tiktoken` (cl100k_base) as a proxy with explicit ~20 KB string slicing and `setImmediate` yields between segments to keep the Node event loop responsive on 100 K-token+ documents.
+
+- **`backendForTool()` factory (`src/mcp/backend-factory.ts`)** — resolves `(BridgeConfig, toolName)` → `OllamaBackend`. v0.3.0 will branch on a backend-selector to return either `OllamaBackend` or `LlamaCppBackend`.
+
+- **`summarize-long-chunked` tool** — map-reduce chunked summarization. Splits the source into overlapping ~2000-token chunks (configurable), summarizes each in parallel via `p-limit`, then recursively combines chunk summaries until one bucket fits a single REDUCE call.
+  - Routes to Tier C (qwen2.5:7b), same model as `summarize-long`.
+  - Per-call soft timeout 50 s via `AbortSignal.any([jobSignal, AbortSignal.timeout(50_000)])` chaining.
+  - REDUCE bucket budget 3 K tokens (sized so `prompt-eval + generation ≤ 50 s` even under thermal-throttling on a 16 GB Mac; full math in `docs/scope-memos/v0.2.0-backend-abstraction-and-chunked-summarize.md` §5.2).
+  - Recursion depth ≤ 3; beyond that the tool returns `partial: true` with the first bucket reduced (intro / thesis preserved, not the appendix-tail).
+  - Fast-path: if the source fits Tier C in one call, the tool runs as a single `summarize-long`-equivalent call (no chunking tax). Makes the chunked tool a strict superset.
+  - Failure isolation: per-chunk MAP errors substitute placeholders and bump `_meta.chunks_failed`; REDUCE-call errors in intermediate buckets do the same and bump `_meta.reduce_failed`; terminal-reduce errors degrade gracefully to "join chunk summaries + `partial: true`" instead of discarding all MAP work.
+
+- **Configuration** — three new env vars affecting only the chunked tool:
+  - `OMCP_CHUNK_SIZE` (default 2000): target tokens per chunk.
+  - `OMCP_CHUNK_OVERLAP` (default 200): overlap between adjacent chunks.
+  - `OMCP_CHUNK_CONCURRENCY` (default 2): MAP fan-out cap.
+
+- **`OLLAMA_HOST` env var support** — `serve` and `models` CLI commands honor the standard `$OLLAMA_HOST` (the same one Ollama itself recognizes) as a fallback when `--host` isn't passed.
+
+- **Telemetry additions on `_meta`** — `chunks_processed`, `reduce_depth`, `partial`, `chunks_failed`, `reduce_failed`. Footer adds `chunks=N` and `partial` flag. Existing telemetry unchanged.
+
+- **`AbortSignal` propagation through `OllamaClient.chat`** — the `signal` field was declared on `ChatOptions` since 0.1.2 but never wired through. Now it injects the signal via a per-call `Ollama` wrapper with custom `fetch` (the npm package's public API has no per-request signal slot — only class-level `abort()`).
+
+- **`docs/prior-art/summarize-long-chunked.md`** and **`docs/scope-memos/v0.2.0-backend-abstraction-and-chunked-summarize.md`** — Prior Art Review (3 independent passes: Claude / Gemini 2.5 Pro / Gemini 3.1 Pro Preview / Copilot CLI) and 5-draft scope memo with cumulative 14 audit conditions all addressed.
+
+- **`tests/unit/`** — 26 new tests (now 59 total): `ollama-backend.test.ts` (modelId + countTokens), `migration-snapshot.test.ts` (8 scenarios captured pre-migration, asserted byte-identical post-migration), `recorder-client.ts` (test util), `fake-backend.ts` (test util with scriptable delays / aborts), `split.test.ts` (5 chunker cases), `map-reduce.test.ts` (15 orchestrator cases), `abort-propagation.test.ts` (4 AbortSignal scenarios — queue-drain guard, per-call timeout isolation, pre-aborted signal short-circuit, chained-signal direction).
+
+- **Smoke T9** — `tests/smoke-bridge.mjs` adds an end-to-end test of `summarize-long-chunked` against a live Ollama daemon. Asserts `chunks_processed > 1`, `reduce_depth ≥ 1`, footer contains `chunks=N`. Brings total smoke checks from 51 → 58.
 
 ### Changed
 
-- **Tier C `num_ctx`: 16384 → 32768** — doubles the supported document size for `summarize-long` from ~12 K words to ~25 K words. Root cause: a real 55 K-token podcast transcript was silently left-truncated to 16 384 tokens at the old setting (`prompt_eval_count` hit num_ctx exactly, and output covered only the final ~30 % of the source). 32 768 still truncates longer documents, but now covers the realistic single-podcast / single-article range on this hardware. KV cache rises from ~1 GB to ~2 GB; measured total ~6.7 GB on a 16 GB Mac — no OOM. **Latency doubles** (102 s → 223 s wall time for a 32 K-token input on qwen2.5:7b Q4_K_M).
+- **All five existing tools (`summarize`, `summarize-long`, `classify`, `extract`, `transform`) migrated to `LlmBackend`** — their handlers now call `backendForTool(...).chat(...)` instead of `client.chat(...)` directly. Migration is provably non-behavioral: the `migration-snapshot.test.ts` suite captures the deterministic ChatOptions payload reaching `OllamaClient.chat()` for 8 representative scenarios; pre- and post-migration recordings are byte-identical for all 8.
 
-  > ⚠️ **Known client limit (Claude Code CLI).** Claude Code's MCP request timeout is a hard wall-clock ~60 s that cannot be extended via `settings.json` or any documented env var (`MCP_TIMEOUT` affects only server startup; see GitHub issues #5221, #22542). `summarize-long` calls that run >60 s therefore fail from Claude Code regardless of `num_ctx`. The tool is usable from MCP clients with longer timeouts (Claude Desktop: 240 s default on Windows) for inputs up to ~20 K tokens. **The structural fix is map-reduce chunking**, which keeps every individual Ollama call under ~50 s — tracked as the next feature (Prior Art Review in progress).
-- **Honest token-savings messaging in tool descriptions** — reworded `summarize`, `summarize-long`, `extract`, and `transform` descriptions (and their `text` / `source_uri` parameter hints) to state clearly that real frontier-token savings only happen with `source_uri`. Inline `text` does not save tokens when the content is already in the caller's context — "if you can pass it inline, you already paid for it." Previously the tools all claimed "Saves frontier tokens, keeps data local" without qualification, which was misleading for the inline-text path.
-- **`classify` repositioned** — `classify` has no `source_uri` entry point and typically runs on short inputs already in context, so token savings were never a real value prop. Description now leads with **reliability** (grammar-constrained output guaranteeing valid category membership), with data locality as a secondary benefit.
-- No bridge-code behavior change for the description reword; descriptions are what the calling frontier LLM reads when deciding how to invoke the tools.
+- **Tier C `num_ctx`: 16384 → 32768** — doubles single-call document size from ~12 K to ~25 K words. Closes the silent-left-truncation issue that prompted this work (a 55 K-token podcast transcript was being reduced to 16 384 tokens at the old setting). KV cache rises ~1 GB → ~2 GB; measured total ~6.7 GB on 16 GB Mac. **Latency doubles** (~100 s → ~220 s wall time for a 32 K-token input). Inputs > 25 K words still silently left-truncate by Ollama itself; the structural fix is `summarize-long-chunked` (above).
+
+- **Honest token-savings messaging across all tool descriptions** — `summarize`, `summarize-long`, `extract`, `transform` descriptions and parameter hints now make explicit that real frontier-token savings only happen with `source_uri` ("if you can pass it inline, you already paid for it"). `classify` repositioned away from "saves tokens" toward its real value prop: grammar-constrained reliability that small local models cannot self-enforce.
+
+### Fixed
+
+- **Bridge no longer crashes when Ollama isn't running yet** — `runBridgeServerStdio` previously did `await client.ping()` before MCP registration. After a reboot, Ollama wouldn't yet be up and the bridge subprocess would crash, leaving Claude Code with "bridge load failed" and no actionable signal. The bridge now registers cleanly regardless of Ollama state. If a tool is invoked before Ollama is reachable, `OllamaClient.chat()` raises `OllamaDaemonError` ("Cannot reach Ollama daemon at <host>. Is it running?") which `toolCallError` surfaces to the calling LLM as `isError: true` — actionable, not catastrophic.
+
+- **`OllamaClient.chat()` connection errors wrapped** — ECONNREFUSED / fetch-failed / ENOTFOUND / EHOSTUNREACH from the underlying ollama npm client are now caught and re-thrown as `OllamaDaemonError`, so existing error-message paths produce friendly text. `AbortError` is re-thrown unchanged.
+
+### Dependencies
+
+- Added: `@langchain/textsplitters` ^1.0.1 (MIT, ~104 kB; transitive: `js-tiktoken` ^1.0.21 + `base64-js`, all pure JS / MIT).
+- Added: `p-limit` ^7.3.0 (MIT, transitive: `yocto-queue`, also MIT, zero-dep).
+- Added: `js-tiktoken` ^1.0.21 (MIT, pure JS port — no WASM, no postinstall — verified against `dqbd/tiktoken/js/README.md` and package.json).
+- Workspace-root `overrides.uuid: ^14.0.0` to clear a moderate `@langchain/core` transitive advisory (uuid bug only triggers on the buf-providing v3/v5/v6 paths we don't touch). `npm audit` reports 0 vulnerabilities post-override.
 
 ### Diagnostics
 
-- **`tests/diag-long-input.mjs`** — new one-off diagnostic (not in CI). Given a long file, probes Tier C at multiple `num_ctx` settings and reports `prompt_eval_count`, latency, and output preview to separate three failure modes: silent truncation, client timeout, and OOM. Used to diagnose the S57 SRT failure and to justify the 16384 → 32768 bump.
+- **`tests/diag-long-input.mjs`** — one-off probe that sends a long file through Tier C at multiple `num_ctx` settings and reports `prompt_eval_count`, latency, and output preview, separating silent-truncation / client-timeout / OOM failure modes. Used during 0.1.x to diagnose the truncation bug that motivated the chunking work.
 
 ### Infrastructure
 
-- **GitHub Actions CI** — added `.github/workflows/ci.yml` with two jobs (build + vitest unit tests) matrixed across Node 22 and Node 24. Triggered on push to `main` and PRs to `main`. Guardrails: `contents: read` permission, 10-min per-job timeout, cancel-in-progress concurrency, `fail-fast: false`. Ollama-dependent tests (`smoke-bridge.mjs`, `probe-numctx.mjs`) are intentionally excluded — see `CONTRIBUTING.md`.
+- **GitHub Actions CI** — `.github/workflows/ci.yml`, two jobs (build + vitest) × Node 22, 24. Triggered on push to / PRs to `main`. Guardrails: `contents: read` permission, 10-min job timeout, cancel-in-progress concurrency, `fail-fast: false`. Ollama-dependent tests (smoke, num_ctx probe, diag) intentionally excluded — see `CONTRIBUTING.md`.
 - **`CONTRIBUTING.md`** — documents the Tier-1 (CI) vs Tier-2 (local-only) test split.
 - **README CI badge**.
+
+### Known limits (Claude Code CLI specifically)
+
+The chunked tool is usable from any MCP client with a request timeout > ~5 minutes (Claude Desktop, custom integrations, the smoke harness). **Claude Code CLI has a hardcoded ~60 s MCP wall** that cannot be extended via `settings.json` or any documented env var (see [anthropics/claude-code #5221](https://github.com/anthropics/claude-code/issues/5221), [#22542](https://github.com/anthropics/claude-code/issues/22542)).
+
+From Claude Code, `summarize-long-chunked` is therefore useful in **fast-path mode only** — for documents up to ~12-15 KB Chinese / ~25 KB English (anything that fits one Tier C call comfortably under 60 s). Larger documents force the chunking path, whose total wall time exceeds 60 s and causes Claude Code to time out the MCP request even though each individual Ollama call stays under the per-call 50 s budget. Removing this from the Claude Code path requires either (a) a streaming response shape with intermediate flushes, (b) splitting the chunked job across multiple MCP tool calls coordinated by the frontier, or (c) Anthropic providing a configurable client-side timeout. All three are post-v0.2.0.
 
 ---
 
