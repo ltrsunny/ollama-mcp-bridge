@@ -60,7 +60,11 @@ program
 program
   .command('models')
   .description('Show Ollama daemon status and installed models.')
-  .option('--host <url>', 'Ollama host', DEFAULT_OLLAMA_HOST)
+  .option(
+    '--host <url>',
+    'Ollama host (defaults to $OLLAMA_HOST env var, then http://127.0.0.1:11434)',
+    process.env['OLLAMA_HOST'] ?? DEFAULT_OLLAMA_HOST,
+  )
   .action(async (opts: { host: string }) => {
     const client = new OllamaClient(opts.host);
     try {
@@ -98,7 +102,11 @@ program
     'Ollama model for Tier C (summarize-long, heavy tasks)',
     process.env.OMCP_TIER_C ?? DEFAULT_CONFIG.tiers.C.model,
   )
-  .option('--host <url>', 'Ollama host', DEFAULT_OLLAMA_HOST)
+  .option(
+    '--host <url>',
+    'Ollama host (defaults to $OLLAMA_HOST env var, then http://127.0.0.1:11434)',
+    process.env['OLLAMA_HOST'] ?? DEFAULT_OLLAMA_HOST,
+  )
   .action(async (opts: { tierB: string; tierC: string; host: string }) => {
     const config = withOverrides(DEFAULT_CONFIG, {
       tierOverrides: {

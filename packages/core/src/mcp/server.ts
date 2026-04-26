@@ -748,8 +748,16 @@ export function buildBridgeServer(
 export async function runBridgeServerStdio(
   options: BridgeServerOptions = {},
 ): Promise<void> {
+  // Lazy connection: do NOT ping Ollama at startup. If we did and Ollama
+  // isn't yet running (common after a reboot, since the macOS Ollama app
+  // takes a few seconds to come up), the bridge subprocess would crash
+  // before registering with MCP — and the client would just see "load
+  // failed" with no actionable signal. Instead, the bridge always
+  // registers cleanly; if a tool is invoked before Ollama is reachable,
+  // the underlying OllamaClient.chat() raises OllamaDaemonError with
+  // an actionable message, which `toolCallError` surfaces to the
+  // calling LLM as `isError: true`.
   const client = new OllamaClient(options.ollamaHost);
-  await client.ping();
 
   const server = buildBridgeServer(client, options);
 

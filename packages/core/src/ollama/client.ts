@@ -130,15 +130,46 @@ export class OllamaClient {
         })
       : this.ollama;
 
-    const res = await ollamaForCall.chat({
-      model: opts.model,
-      messages,
-      stream: false,
-      think: opts.think ?? false,
-      keep_alive: opts.keepAlive,
-      format: opts.format,
-      options: Object.keys(ollamaOptions).length > 0 ? ollamaOptions : undefined,
-    });
+    let res;
+    try {
+      res = await ollamaForCall.chat({
+        model: opts.model,
+        messages,
+        stream: false,
+        think: opts.think ?? false,
+        keep_alive: opts.keepAlive,
+        format: opts.format,
+        options: Object.keys(ollamaOptions).length > 0 ? ollamaOptions : undefined,
+      });
+    } catch (err) {
+      // The bridge runs with a lazy startup (no ping at register time), so
+      // a "daemon not reachable" error is expected on the first call after
+      // a reboot when Ollama hasn't yet spun up. The underlying npm client
+      // surfaces this as ECONNREFUSED / fetch failed / cause-chain network
+      // errors. Wrap them in OllamaDaemonError so `toolCallError` produces
+      // an actionable message ("Cannot reach Ollama daemon at <host> — is
+      // it running?") instead of a raw stack trace.
+      //
+      // We re-throw AbortError unchanged — that's a real cancel, not a
+      // connection problem.
+      if ((err as Error)?.name === 'AbortError') throw err;
+      const cause = (err as { cause?: { code?: string; errno?: string } })?.cause;
+      const code =
+        cause?.code ?? cause?.errno ?? (err as { code?: string })?.code ?? '';
+      const msg = (err as Error)?.message ?? String(err);
+      const looksConnectionRefused =
+        code === 'ECONNREFUSED' ||
+        code === 'ENOTFOUND' ||
+        code === 'EHOSTUNREACH' ||
+        /fetch failed|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH/i.test(msg);
+      if (looksConnectionRefused) {
+        throw new OllamaDaemonError(
+          `Cannot reach Ollama daemon at ${this.host}. Is it running? (${msg})`,
+          err,
+        );
+      }
+      throw err;
+    }
 
     return {
       text: res.message.content,
