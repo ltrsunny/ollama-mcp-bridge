@@ -53,6 +53,7 @@
     "nanoid": "^5.1.9",
     "ollama": "^0.6.3",
     "p-limit": "^7.3.0",
+    "p-queue": "^9.2.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
