@@ -14,6 +14,15 @@ import { sanitizeSchemaForOllama } from './sanitize.js';
 import { readSource, readSourceOptionsFromEnv } from '../io/sourceReader.js';
 import { backendForTool } from './backend-factory.js';
 import { chunkedSummarize } from '../chunking/map-reduce.js';
+import type { JobRegistry } from '../jobs/registry.js';
+import type { JobRunner } from '../jobs/runner.js';
+import type { ProgressCaptureExtra } from '../jobs/progress-capture.js';
+
+/** Loose-typed handler stored in the toolHandlers Map for the runner to invoke
+ *  on async-job execution. ProgressCaptureExtra is a structural subset of the
+ *  SDK's RequestHandlerExtra; v0.2.0 handlers access only fields it provides. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type CapturedToolHandler = (args: any, extra: ProgressCaptureExtra) => Promise<any>;
 
 export interface BridgeServerOptions {
   ollamaHost?: string;
@@ -27,6 +36,17 @@ export interface BridgeServerOptions {
    * Tier 2 (MiniLM ONNX) additionally requires OMCP_DEFENDER_TIER2=1.
    */
   defendUntrusted?: boolean;
+
+  // ── v0.3.0 async jobs ────────────────────────────────────────────────────
+  /** When provided alongside jobRunner, registers the async-job MCP tools
+   *  (enqueue-job in commit #4; wait_for_job + read_job_result in #5). */
+  jobRegistry?: JobRegistry;
+  /** Workhorse for actually running enqueued jobs. Pair with jobRegistry. */
+  jobRunner?: JobRunner;
+  /** Optional pre-built Map for the runner's ToolInvoker. If omitted, a fresh
+   *  Map is created and populated during tool registration. Tests can pass
+   *  their own to inspect. */
+  toolHandlers?: Map<string, CapturedToolHandler>;
 }
 
 // ── System prompts ──────────────────────────────────────────────────────────
@@ -97,6 +117,10 @@ interface ToolExtra {
   _meta?: { progressToken?: string | number };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sendNotification: (notification: any) => Promise<void>;
+  /** AbortSignal threaded to backend.chat(). Provided by the MCP SDK for
+   *  sync calls; provided by the runner's progress-capture shim in async
+   *  mode. */
+  signal: AbortSignal;
 }
 
 /** Send a notifications/progress if the caller supplied a progressToken. */
@@ -162,8 +186,29 @@ export function buildBridgeServer(
     version: options.version ?? '0.1.2',
   });
 
+  // ── tool-handler capture (v0.3.0) ─────────────────────────────────────────
+  // The async-job runner (when wired) invokes registered tool handlers via
+  // this Map. Every registerCapturedTool call mirrors a server.registerTool
+  // call AND records the handler reference for later invocation. v0.2.0
+  // behavior unchanged — the Map is populated as a side effect; existing
+  // direct MCP tool calls go through the SDK as always.
+  const toolHandlers = options.toolHandlers ?? new Map<string, CapturedToolHandler>();
+  const registerCapturedTool = (
+    name: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    schema: any,
+    // Args are intentionally `any` so destructuring patterns in handler
+    // bodies type-check; runtime shape is enforced by the schema (Zod).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    handler: (args: any, extra: ToolExtra) => Promise<unknown>,
+  ): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    server.registerTool(name, schema, handler as any);
+    toolHandlers.set(name, handler as CapturedToolHandler);
+  };
+
   // ── summarize ─────────────────────────────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'summarize',
     {
       title: 'Summarize text via local Ollama',
@@ -188,7 +233,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, source_uri, style }, extra) => {
+    async ({ text, source_uri, style }, extra: ToolExtra) => {
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
@@ -248,7 +293,7 @@ export function buildBridgeServer(
   );
 
   // ── summarize-long ────────────────────────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'summarize-long',
     {
       title: 'Summarize long documents via local Ollama (larger model)',
@@ -273,7 +318,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, source_uri, style }, extra) => {
+    async ({ text, source_uri, style }, extra: ToolExtra) => {
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
@@ -333,7 +378,7 @@ export function buildBridgeServer(
   );
 
   // ── summarize-long-chunked (v0.2.0) ──────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'summarize-long-chunked',
     {
       title: 'Summarize long documents via map-reduce chunking (Tier C)',
@@ -358,7 +403,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, source_uri, style, max_chunks }, extra) => {
+    async ({ text, source_uri, style, max_chunks }, extra: ToolExtra) => {
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
@@ -461,7 +506,7 @@ export function buildBridgeServer(
   );
 
   // ── classify (F1) ─────────────────────────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'classify',
     {
       title: 'Classify text into categories via local Ollama',
@@ -487,7 +532,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, categories, allow_multiple, explain }, extra) => {
+    async ({ text, categories, allow_multiple, explain }, extra: ToolExtra) => {
       const tierKey = tierForTool(config, 'classify');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
@@ -547,7 +592,7 @@ export function buildBridgeServer(
   );
 
   // ── extract (F2) ──────────────────────────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'extract',
     {
       title: 'Extract structured data from text via local Ollama',
@@ -578,7 +623,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, source_uri, schema }, extra) => {
+    async ({ text, source_uri, schema }, extra: ToolExtra) => {
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
@@ -658,7 +703,7 @@ export function buildBridgeServer(
   );
 
   // ── transform (F3) ────────────────────────────────────────────────────────
-  server.registerTool(
+  registerCapturedTool(
     'transform',
     {
       title: 'Rewrite or transform text via local Ollama',
@@ -684,7 +729,7 @@ export function buildBridgeServer(
         ),
       },
     },
-    async ({ text, source_uri, instruction }, extra) => {
+    async ({ text, source_uri, instruction }, extra: ToolExtra) => {
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
@@ -742,6 +787,76 @@ export function buildBridgeServer(
     },
   );
 
+  // ── v0.3.0 async-job tools ─────────────────────────────────────────────────
+  // Registered only when both jobRegistry AND jobRunner are provided. Tests
+  // that don't need async machinery omit them and the v0.2.0 surface stays
+  // identical.
+  if (options.jobRegistry && options.jobRunner) {
+    const jobRegistry = options.jobRegistry;
+    const jobRunner = options.jobRunner;
+    const ASYNC_TOOL_WHITELIST = [
+      'summarize',
+      'summarize-long',
+      'summarize-long-chunked',
+      'classify',
+      'extract',
+      'transform',
+    ] as const;
+
+    server.registerTool(
+      'enqueue-job',
+      {
+        title: 'Enqueue a long-running tool call as a background job',
+        description:
+          'DELEGATION GUIDANCE: use this when a regular tool call would exceed your MCP client request timeout (Claude Code: ~60 s). The job is persisted to .memory/jobs/ and runs in the background; you receive a job_id immediately. Then use wait_for_job to long-poll for completion or read_job_result to fetch the persisted result. ' +
+          'TYPICAL USE: summarize-long-chunked on documents > 25 K words; any extract/transform on large source_uri inputs. ' +
+          'Idempotency: enqueue-job dedupes by hash(tool_name + args) — repeated calls with identical args while a prior job is still queued/running return the existing job_id, not a fresh one.',
+        inputSchema: {
+          tool_name: z.enum(ASYNC_TOOL_WHITELIST).describe(
+            'Which v0.2.0 tool to run as a job. Whitelisted to prevent recursion or self-reference.',
+          ),
+          args: z.record(z.string(), z.unknown()).describe(
+            'Args object forwarded verbatim to the wrapped tool. Validated by the wrapped tool at execution time (errors surface in job status, not at enqueue).',
+          ),
+          ttl_days: z.number().int().min(1).max(30).optional().describe(
+            'How many days the result stays in .memory/jobs/ before GC. Default 7. Capped at 30.',
+          ),
+        },
+      },
+      async ({ tool_name, args, ttl_days }: {
+        tool_name: typeof ASYNC_TOOL_WHITELIST[number];
+        args: Record<string, unknown>;
+        ttl_days?: number;
+      }) => {
+        try {
+          const meta = await jobRegistry.enqueue(tool_name, args, ttl_days ?? 7);
+          jobRunner.schedule(meta);
+          const expiresAt = new Date(
+            new Date(meta.enqueued_at).getTime() + meta.ttl_days * 86400_000,
+          ).toISOString();
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    job_id: meta.job_id,
+                    enqueued_at: meta.enqueued_at,
+                    expires_at: expiresAt,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        } catch (err) {
+          return toolCallError(err);
+        }
+      },
+    );
+  }
+
   return server;
 }
 
@@ -759,7 +874,53 @@ export async function runBridgeServerStdio(
   // calling LLM as `isError: true`.
   const client = new OllamaClient(options.ollamaHost);
 
-  const server = buildBridgeServer(client, options);
+  // ── v0.3.0 async-job machinery ────────────────────────────────────────────
+  // Construct store + registry + runner before the server so they can be
+  // injected via options. The toolHandlers Map is shared by reference: the
+  // server populates it during registerCapturedTool calls, the runner reads
+  // from it via the ToolInvoker closure built below.
+  const { JobStore } = await import('../jobs/store.js');
+  const { JobRegistry } = await import('../jobs/registry.js');
+  const { JobRunner } = await import('../jobs/runner.js');
+
+  const memoryDir =
+    process.env['OMCP_MEMORY_DIR'] ??
+    `${process.cwd()}/.memory/jobs`;
+  const jobStore = new JobStore({ baseDir: memoryDir });
+  const jobRegistry = new JobRegistry(jobStore);
+  const orphanReport = await jobRegistry.initialize();
+  if (orphanReport.orphansFailed > 0) {
+    process.stderr.write(
+      `bridge: marked ${orphanReport.orphansFailed} orphaned job(s) as failed (bridge restart)\n`,
+    );
+  }
+
+  const toolHandlers = new Map<string, CapturedToolHandler>();
+  // ToolInvoker closes over the toolHandlers Map. By the time enqueue-job
+  // schedules a call, the Map is fully populated by buildBridgeServer.
+  const jobRunner = new JobRunner(
+    jobRegistry,
+    async (toolName, args, extra) => {
+      const handler = toolHandlers.get(toolName);
+      if (!handler) {
+        return {
+          isError: true,
+          content: [
+            { type: 'text' as const, text: `Unknown tool in async job: ${toolName}` },
+          ],
+        };
+      }
+      return (await handler(args, extra)) as { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+    },
+    { concurrency: parseEnvInt('OMCP_JOB_CONCURRENCY') ?? 1 },
+  );
+
+  const server = buildBridgeServer(client, {
+    ...options,
+    jobRegistry,
+    jobRunner,
+    toolHandlers,
+  });
 
   // F4: warm up Tier-2 ONNX model at startup if enabled, so the first tool
   // call doesn't pay the 1-2 s load cost.
