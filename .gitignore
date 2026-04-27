@@ -13,3 +13,8 @@ coverage/
 *.tsbuildinfo
 .cache/
 .claude/settings.local.json
+
+# v0.3.0 Memory Bank — async job persistence at .memory/
+# Users running bridge against this repo (or our own dogfooding) will
+# create transient job files here; never commit them.
+.memory/
