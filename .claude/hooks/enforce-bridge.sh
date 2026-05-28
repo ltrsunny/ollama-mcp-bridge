@@ -68,6 +68,11 @@
 #   OMCP_HOOK_TASK_OUTPUT_RE            ERE matching agent task-output paths
 #                                       (empty string disables; default
 #                                       matches /claude-<uid>/.../tasks/*.output)
+#   OMCP_HOOK_NON_READER_FIRST_RE       ERE matching commands whose first
+#                                       word(s) are definitively NOT readers
+#                                       (e.g. `git commit`, `gh pr create`)
+#                                       and should skip the Bash scan entirely
+#                                       (empty string disables exemption)
 
 set -euo pipefail
 
@@ -90,6 +95,22 @@ EXTRA_ALLOWED_RAW="${OMCP_HOOK_EXTRA_ALLOWED_PREFIXES:-}"
 # root). Disable with OMCP_HOOK_TASK_OUTPUT_RE="".
 DEFAULT_TASK_OUTPUT_RE='/claude-[0-9]+/[^/]+/[^/]+/tasks/[^/]+\.output$'
 TASK_OUTPUT_RE="${OMCP_HOOK_TASK_OUTPUT_RE-$DEFAULT_TASK_OUTPUT_RE}"
+
+# B1 stop-gap: first-word non-reader allowlist. Some commands are
+# message-taking (e.g. `git commit -m "..."`, `gh pr create -b "..."`)
+# or otherwise definitively NOT readers, yet contain reader-shape
+# substrings — e.g. `git commit -m "$(cat <<EOF ... <path> ... EOF)"`
+# false-triggers the scan because `(cat` matches the reader regex AND
+# the heredoc body contains a path-shape token. When the first word(s)
+# of the command match this regex, the Bash scan is skipped entirely.
+#
+# Limitation: a non-reader prefix chained to a real reader (e.g.
+# `git commit -m "x"; cat /sensitive`) still bypasses the scan via
+# this exemption. The thorough fix is shfmt-AST parsing; this stop-gap
+# addresses the documented `git commit` heredoc false-block — see
+# .claude/brainstorm/bridge-hook-git-commit-evidence-2026-05-28.md.
+DEFAULT_NON_READER_FIRST_RE='^[[:space:]]*(git[[:space:]]+(commit|tag|notes)|gh[[:space:]]+(issue|pr|release)[[:space:]]+create|hub[[:space:]]+(issue|pull-request|release)[[:space:]]+create)([[:space:]]|$)'
+NON_READER_FIRST_RE="${OMCP_HOOK_NON_READER_FIRST_RE-$DEFAULT_NON_READER_FIRST_RE}"
 
 # Without a project root we can't tell internal vs external. Under-enforce
 # rather than block all reads in a misconfigured shell.
@@ -313,6 +334,16 @@ case "$TOOL_NAME" in
 
   Bash)
     CMD="$(jq -r '.tool_input.command // ""' <<<"$INPUT")"
+    # B1 stop-gap: first-word non-reader allowlist. Commands that take a
+    # message body (`git commit -m`, `gh pr create -b`, ...) are NOT readers
+    # but may contain reader-shape substrings — e.g.
+    # `git commit -m "$(cat <<EOF ... EOF)"` false-triggers the scan because
+    # `(cat` matches the reader regex AND the heredoc body may contain
+    # path-shape tokens. Skip the scan entirely for these first-word matches.
+    # See config block + evidence memo for the known chain-bypass limitation.
+    if [ -n "$NON_READER_FIRST_RE" ] && printf '%s' "$CMD" | grep -qE "$NON_READER_FIRST_RE"; then
+      exit 0
+    fi
     # Reader-command vocabulary at command position (start or after
     # |, ;, &&, ||, open-paren). Quoted occurrences inside strings are
     # ignored.
