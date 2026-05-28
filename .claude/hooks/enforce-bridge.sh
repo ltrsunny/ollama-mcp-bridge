@@ -46,6 +46,16 @@
 #      Default extensions: log diff jsonl ips ndjson csv
 #      Threshold: same as band 2.
 #
+# Agent task-output exemption: paths matching the agent's own task-scratch
+# pattern (default `/claude-<uid>/<...>/tasks/<...>.output`) are exempt
+# from all bands. These are working scratch I/O for the running session,
+# not "external content to avoid" — blocking them forces the agent to
+# bridge-extract its own outputs (lossy 4B paraphrase). Pattern uses
+# path shape, not a hard-coded `/private/tmp` prefix, so the exemption
+# works under macOS (/private/tmp), Linux/Docker (/tmp), and any other
+# scratch root. Override or disable via OMCP_HOOK_TASK_OUTPUT_RE (empty
+# string disables the exemption entirely).
+#
 # Source code and config inside the project (not matching bands 2 or 3)
 # stay allow-listed — surgical edits still need raw bytes.
 #
@@ -55,6 +65,9 @@
 #   OMCP_HOOK_ANALYSIS_PATHS            colon-separated project-relative paths
 #   OMCP_HOOK_DATA_EXTENSIONS           space-separated extensions (no dot)
 #   OMCP_HOOK_EXTRA_ALLOWED_PREFIXES    colon-separated absolute prefixes
+#   OMCP_HOOK_TASK_OUTPUT_RE            ERE matching agent task-output paths
+#                                       (empty string disables; default
+#                                       matches /claude-<uid>/.../tasks/*.output)
 
 set -euo pipefail
 
@@ -69,6 +82,14 @@ DEFAULT_DATA_EXTS="log diff jsonl ips ndjson csv"
 DATA_EXTS_RAW="${OMCP_HOOK_DATA_EXTENSIONS:-$DEFAULT_DATA_EXTS}"
 
 EXTRA_ALLOWED_RAW="${OMCP_HOOK_EXTRA_ALLOWED_PREFIXES:-}"
+
+# Agent task-output scratch (background-task `.output` files). Exempted from
+# all bands. Pattern matches the standard layout: anything ending with
+# `/claude-<uid>/<encoded-cwd>/<session-uuid>/tasks/<task-id>.output`
+# (works for macOS /private/tmp + Linux /tmp + Docker — no hard-coded
+# root). Disable with OMCP_HOOK_TASK_OUTPUT_RE="".
+DEFAULT_TASK_OUTPUT_RE='/claude-[0-9]+/[^/]+/[^/]+/tasks/[^/]+\.output$'
+TASK_OUTPUT_RE="${OMCP_HOOK_TASK_OUTPUT_RE-$DEFAULT_TASK_OUTPUT_RE}"
 
 # Without a project root we can't tell internal vs external. Under-enforce
 # rather than block all reads in a misconfigured shell.
@@ -184,6 +205,12 @@ is_data_file() {
   printf '%s\n' "$p" | grep -qE "$DATA_EXT_RE"
 }
 
+is_agent_task_output() {
+  local p="$1"
+  [ -z "$TASK_OUTPUT_RE" ] && return 1
+  printf '%s' "$p" | grep -qE "$TASK_OUTPUT_RE"
+}
+
 file_size() {
   stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo 0
 }
@@ -250,6 +277,12 @@ EOF
 # Check a fully-resolved path. Exit 2 if blocked.
 check_path() {
   local p="$1"
+  # A4: agent's own task-output scratch is exempt from all bands.
+  # (Otherwise the agent has to bridge-extract its own outputs — lossy
+  # via the 4B summarizer.)
+  if is_agent_task_output "$p"; then
+    return 0
+  fi
   if ! is_allowed_path "$p"; then
     if bigger_than "$p" "$EXTERNAL_THRESHOLD"; then
       emit_external_block "$p"
