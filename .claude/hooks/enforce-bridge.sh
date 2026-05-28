@@ -251,14 +251,20 @@ File: $p ($size bytes)
 Outside the project + larger than ${EXTERNAL_THRESHOLD} bytes.
 
 Direct read brings raw bytes into your context — defeats the bridge.
-Route through the local model instead:
+Route through the local-mcp-toolbelt bridge instead. Tool suffixes
+(prepend with the current MCP namespace — see below):
 
-  mcp__local-mcp-toolbelt__summarize-long  source_uri="file://$p"
-  mcp__local-mcp-toolbelt__extract         source_uri="file://$p"  schema={...}
-  mcp__local-mcp-toolbelt__classify        text="..."  categories=[...]
+  *__summarize-long   source_uri="file://$p"
+  *__extract          source_uri="file://$p"  schema={...}
+  *__classify         text="..."  categories=[...]
 
-Pick the tool that matches the task. Local Qwen3 on oMLX — no frontier
-tokens spent on prefill of this file.
+Local Qwen3 on oMLX — no frontier tokens spent on prefill of this file.
+
+The namespace prefix varies by install mode. Use ToolSearch to find
+the current one — e.g. query "select:*local-mcp-toolbelt*__extract"
+or keyword "local-mcp-toolbelt". Known prefixes:
+  legacy:  mcp__local-mcp-toolbelt__*
+  plugin:  mcp__plugin_local-mcp-toolbelt_local-mcp-toolbelt__*
 
 If you genuinely need raw bytes (precise edit, code surgery): the file
 must be inside the project tree OR <= ${EXTERNAL_THRESHOLD} bytes.
@@ -274,11 +280,18 @@ Reason: $reason — larger than ${ANALYSIS_THRESHOLD} bytes.
 
 This is research / diagnostic / bulk data content. Reading it whole
 burns the same tokens whether the file lives inside or outside the
-project. Use the bridge:
+project. Use the bridge — tool suffixes (prepend with the current MCP
+namespace — see below):
 
-  mcp__local-mcp-toolbelt__summarize-long  source_uri="file://$p"
-  mcp__local-mcp-toolbelt__extract         source_uri="file://$p"  schema={...}
-  mcp__local-mcp-toolbelt__classify        text="..."  categories=[...]
+  *__summarize-long   source_uri="file://$p"
+  *__extract          source_uri="file://$p"  schema={...}
+  *__classify         text="..."  categories=[...]
+
+The namespace prefix varies by install mode. Use ToolSearch to find
+the current one — query "select:*local-mcp-toolbelt*__extract" or
+keyword "local-mcp-toolbelt". Known prefixes:
+  legacy:  mcp__local-mcp-toolbelt__*
+  plugin:  mcp__plugin_local-mcp-toolbelt_local-mcp-toolbelt__*
 
 Source code, configs, and small notes inside the project stay
 allow-listed — only analysis-path / data-file content is enforced

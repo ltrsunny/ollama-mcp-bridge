@@ -81,7 +81,33 @@ OMCP_HOOK_NON_READER_FIRST_RE='' bash "$HOOK" 2>/dev/null <<'JSONEOF'
 JSONEOF
 assert_exit "B1.4 same case with exemption disabled exits 2 (pre-B1 reproduced)" 2 "$?"
 
-# ----------- B3 / B2 -- placeholders, populated as those fixes land ------
+# ----------- B3: dynamic error text ---------------------------------------
+echo "[B3 -- dynamic error text]"
+
+OUT="$(bash "$HOOK" 2>&1 <<'JSONEOF'
+{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
+JSONEOF
+)"
+
+if printf '%s' "$OUT" | grep -q 'ToolSearch'; then
+    PASS=$((PASS+1)); printf '  PASS  B3.1 block message mentions ToolSearch\n'
+else
+    FAIL=$((FAIL+1)); printf '  FAIL  B3.1 block message lacks ToolSearch\n'
+fi
+
+if printf '%s' "$OUT" | grep -qE '\*__extract|\*__summarize-long'; then
+    PASS=$((PASS+1)); printf '  PASS  B3.2 block message uses suffix-only tool syntax\n'
+else
+    FAIL=$((FAIL+1)); printf '  FAIL  B3.2 block message lacks suffix-only syntax\n'
+fi
+
+if printf '%s' "$OUT" | grep -q 'plugin_local-mcp-toolbelt'; then
+    PASS=$((PASS+1)); printf '  PASS  B3.3 block message includes plugin-install namespace example\n'
+else
+    FAIL=$((FAIL+1)); printf '  FAIL  B3.3 block message missing plugin namespace example\n'
+fi
+
+# ----------- B2 -- placeholder, populated when fix lands ------------------
 
 echo
 echo "----- summary -----"
