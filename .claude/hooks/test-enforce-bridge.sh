@@ -107,7 +107,38 @@ else
     FAIL=$((FAIL+1)); printf '  FAIL  B3.3 block message missing plugin namespace example\n'
 fi
 
-# ----------- B2 -- placeholder, populated when fix lands ------------------
+# ----------- B2: empirical threshold raise (1KB -> 4KB) -------------------
+echo "[B2 -- empirical threshold raise]"
+
+# Empirical basis (Qwen3-4B summarize on prose, measured 2026-05-28):
+# saved~= tokens of +82 (1KB), +859 (4KB), +1885 (8KB). The 4KB inflection
+# point makes 1KB a poor trade (high latency, low savings) and 4KB+ a clear
+# win. New default external threshold is 4096 bytes (was 1024).
+
+# Setup: 2KB fixture, above the old 1024 threshold and below the new 4096.
+mkdir -p /tmp/b2-test 2>/dev/null
+B2_FIXTURE=/tmp/b2-test/2kb.txt
+if [ ! -f "$B2_FIXTURE" ] || [ "$(stat -f%z "$B2_FIXTURE" 2>/dev/null || stat -c%s "$B2_FIXTURE" 2>/dev/null)" != "2048" ]; then
+    yes "the quick brown fox jumps over the lazy dog. " | tr -d '\n' | head -c 2048 > "$B2_FIXTURE"
+fi
+
+# Positive: 2KB external file is now UNDER the 4KB threshold -> allowed.
+bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$B2_FIXTURE"}}
+JSONEOF
+assert_exit "B2.1 Read 2KB external (now under 4KB threshold) exits 0" 0 "$?"
+
+# Reverse: 23KB external (~/.claude.json) is well OVER the new threshold -> blocked.
+bash "$HOOK" 2>/dev/null <<'JSONEOF'
+{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
+JSONEOF
+assert_exit "B2.2 Read 23KB external (over 4KB threshold) exits 2 (still blocks)" 2 "$?"
+
+# Reverse: restore old 1024 threshold via env -> 2KB blocks again (pre-B2).
+OMCP_HOOK_THRESHOLD_BYTES=1024 bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$B2_FIXTURE"}}
+JSONEOF
+assert_exit "B2.3 2KB external with old 1024 threshold exits 2 (pre-B2 reproduced)" 2 "$?"
 
 echo
 echo "----- summary -----"

@@ -20,8 +20,15 @@
 # Three enforcement bands:
 #
 #   1. External files (outside $CLAUDE_PROJECT_DIR + allow-listed prefixes)
-#      Threshold: OMCP_HOOK_THRESHOLD_BYTES (default 1024).
+#      Threshold: OMCP_HOOK_THRESHOLD_BYTES (default 4096).
 #      Above the threshold → block.
+#      Empirical basis for 4096 (raised from 1024 on 2026-05-28):
+#      Qwen3-4B summarize on prose files yields saved~= tokens of
+#      +82 at 1KB (poor trade vs ~6.5s latency), +859 at 4KB (clear
+#      win, ~8s), +1885 at 8KB (large win, ~12s). Raising 1024→4096
+#      stops false-blocking small external reads (~/.claude.json
+#      ≈1.1KB, single-page briefs ≈2KB, agent task scratch <4KB)
+#      while keeping the bridge enforced where it actually pays off.
 #
 #   2. Project-internal "analysis paths" (research artifacts, diagnostics,
 #      design memos in non-edit phases)
@@ -77,7 +84,10 @@
 set -euo pipefail
 
 # ---------- configuration --------------------------------------------------
-EXTERNAL_THRESHOLD="${OMCP_HOOK_THRESHOLD_BYTES:-1024}"
+# Default raised 1024 -> 4096 on 2026-05-28 with empirical justification:
+# Qwen3-4B summarize saved~= +82 tokens at 1KB (poor trade) vs +859 at
+# 4KB and +1885 at 8KB. See top-of-file comment for fuller detail.
+EXTERNAL_THRESHOLD="${OMCP_HOOK_THRESHOLD_BYTES:-4096}"
 ANALYSIS_THRESHOLD="${OMCP_HOOK_ANALYSIS_THRESHOLD_BYTES:-4096}"
 
 DEFAULT_ANALYSIS_PATHS=".claude/brainstorm:.claude/diagnostics:docs/notes:docs/scope-memos:docs/prior-art"
