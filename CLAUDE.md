@@ -9,11 +9,14 @@ Highest priority context. Keep under 200 lines.
 Desktop, Cursor, Cline, OpenClaw, Zed, …) delegate lightweight tasks to a local
 oMLX inference server to save frontier tokens, stay private, and run offline.
 
-Monorepo: `packages/core/` is the publishable package. Shipped at v0.2.0;
-v0.5.0 current (rename from ollama-mcp-bridge; Ollama and llama.cpp backends
-removed in this release in favor of a single oMLX/MlxHttpBackend path).
+Monorepo: `packages/core/` is the publishable package. **v0.6.0 shipped
+2026-05-18 + published to npm registry 2026-05-26** as
+`local-mcp-toolbelt@0.6.0` (npmjs.com/package/local-mcp-toolbelt).
+Users install via `npm i -g local-mcp-toolbelt` (bin: `local-mcp`).
+v0.5.0 had renamed from ollama-mcp-bridge + removed Ollama+llama.cpp
+backends; v0.6.0 added async-job triad + per-tool thinking mode.
 
-## Tools currently exposed (6)
+## Tools currently exposed (7)
 
 | Tool | Tier | Notes |
 |---|---|---|
@@ -23,11 +26,12 @@ removed in this release in favor of a single oMLX/MlxHttpBackend path).
 | `classify` | B | Strict-schema enum labels via oMLX json_schema |
 | `extract` | B | Strict-schema JSON via oMLX json_schema |
 | `transform` | B | Free-form rewrite |
+| `diff-semantic-index` | B | Structured diff classifier (count tracked in `MAX_OUTPUT_TOKENS`) |
 
-All six tools accept `source_uri` (file:// or http(s)://) — preferred over
+All tools accept `source_uri` (file:// or http(s)://) — preferred over
 inline `text` because raw bytes never enter the frontier context.
 
-## Tier system (v0.5.0: all oMLX)
+## Tier system (v0.6.0: all oMLX)
 
 | Tier | Model | numCtx | Status |
 |---|---|---|---|
@@ -47,7 +51,7 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
 (unified-mem mapped, use wall-time). See
 `docs/notes/v0.6.0-60s-wall-brainstorm-2026-05-11.md`.
 
-## Per-tool output caps (v0.5.0)
+## Per-tool output caps (v0.6.0)
 
 `MAX_OUTPUT_TOKENS` in `src/mcp/server.ts` (mirrored in
 `tests/eval/lib/invoke.mjs`) — semantic ceilings, not tier-driven:
@@ -81,7 +85,7 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
 - `LlmBackend` interface (`src/llm/backend.ts`) — neutral contract: `chat`,
   `countTokens`, `ping`. AbortSignal threads through `chat`.
 - `MlxHttpBackend` (`src/llm/mlx-http-backend.ts`) — the only implementation
-  in v0.5.0. Speaks OpenAI-compatible HTTP to oMLX; uses `response_format:
+  in v0.6.0. Speaks OpenAI-compatible HTTP to oMLX; uses `response_format:
   {type: "json_schema", strict: true}` for grammar enforcement.
 - `backendForTool(config, toolName)` resolves tier → memoized MlxHttpBackend
   instance keyed by `(mlxUrl, mlxModelName)`.
@@ -93,7 +97,7 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
 
 ## Testing layout
 
-- `npm test` (in `packages/core/`) → 147 unit tests via vitest. Pure in-process,
+- `npm test` (in `packages/core/`) → 207 unit tests via vitest. Pure in-process,
   no oMLX required (all backend calls go through a `RecorderBackend` test
   double via `_installTestBackend`). Runs in CI.
 - `node tests/probe-numctx.mjs` and `tests/diag-long-input.mjs` are diagnostic
@@ -110,14 +114,25 @@ The Auditor is the user. No code lands ahead of an approved scope memo.
 
 ## Bridge-usage discipline (enforced by hook, not honour-system)
 
-`.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on Read|Bash that
-*physically blocks* the slop paths (exit 2). Seed for a v0.7+ product
-feature — toolbelt will ship `hooks/` + `omcp install-hooks`. See
-`docs/scope-memos/v0.7.0-bridge-enforcement-2026-05-15.md`.
+`.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on **Read** that
+*physically blocks* the slop paths (exit 2). (Bash command-scanning was
+removed 2026-05-29 per **S5** — regex-parsing shell strings was
+structurally unsound + false-block-prone; enforcement is Read-only.
+Threat model = self-discipline, see
+`.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md`.) Plugin packaging path
+(`.claude-plugin/` + `.mcp.json` + `hooks/hooks.json` at repo root)
+PoC committed 2026-05-25 (3e0d18b + 02760c5) but plugin marketplace
+distribution **deferred** — 2026-05-26 adversarial review surfaced
+structural blocker (plugin meta at repo root, `dist/` gitignored at
+`packages/core/`, no single plugin source type pulls both). Until
+F2 (move plugin meta into `packages/core/`) is tested or Anthropic
+documents npm-source plugin layout, distribution is npm-only:
+`npm i -g local-mcp-toolbelt` + `claude mcp add -s user
+local-mcp-toolbelt -- npx -p local-mcp-toolbelt local-mcp serve`.
 
 Three enforcement bands:
-- **External files > 1 KB** — outside project + `~/.claude` + `~/.omlx`.
-  Route via `source_uri`.
+- **External files > 4 KB** — outside project + `~/.claude` + `~/.omlx`.
+  Route via `source_uri`. (1 KB → 4 KB on 2026-05-28, B2 empirical basis.)
 - **Project-internal analysis paths > 4 KB** — `.claude/brainstorm`,
   `.claude/diagnostics`, `docs/notes`, `docs/scope-memos`, `docs/prior-art`.
   Edit-mode marker (all analysis paths): `touch .claude/.bridge-edit-mode` — auto-expires 60min (override via `OMCP_HOOK_MARKER_EXPIRE_SEC`); rm to exit; git-ignored. Renamed 2026-05-22 from `.scope-memo-edit-mode` after Bug B adversarial review.
@@ -147,8 +162,12 @@ Token-saving tactics still: `tsc | head -n 50`; `grep` + `Read offset/limit`; `r
   - `gem` — 3.5-flash REST direct, ~2 s, NO agentic.
   - `gem-pro` — 2.5-pro OAuth, agentic; expires 6/18 (override
     `GEM_PRO_MODEL=gemini-3.1-pro-preview` fail-fast, but prefer `agy_pro`).
-  - **`copilot-free`** ⭐ — Copilot agentic ReAct via Google API key
-    (gemini-3.5-flash). Fills agentic+free+post-6/18 gap, 0 Premium burn.
+  - **`copilot-free`** ⚠ — Copilot agentic ReAct via Google API key
+    (gemini-3.5-flash). 设计上填 agentic+free+post-6/18 gap，0 Premium 烧。
+    **但 2026-05-22 empirical: AI Studio OAI-compat shim 上限 ~17.2K tokens =
+    Copilot 17K sysprompt 后 user prompt 只剩 ~200 字符。长 brief 全 400。
+    短任务 OK，长 fan-out brief 不可用。** Cross-provider picker 设计已 fan-out
+    收敛 (cross-provider-byok-picker-brief-2026-05-22.md) 但未实施。
   - **`agy_pro`** ⭐ — Antigravity CLI, sticky `/model`; separate quota pool, survives 6/18.
 - **GitHub Models** (`ghm`, `ghm_pro`; helpers.sh): multi-vendor proxy
   via PAT `GITHUB_MODELS_TOKEN`. Free quota 50/day high + 150/day low.

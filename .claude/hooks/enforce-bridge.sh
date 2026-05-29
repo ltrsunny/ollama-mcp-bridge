@@ -6,13 +6,17 @@
 # Why: the soft rule "use bridge for >1KB content" was repeatedly ignored
 # in real sessions. This is the hard-enforcement layer.
 #
-# Scope — this is the SEED for a v0.7+ product feature:
-#   `local-mcp-toolbelt` will ship a `hooks/` directory plus an
-#   `omcp install-hooks` command so any user can adopt the same
-#   enforcement without copying this file by hand. Keep the
-#   implementation generic: no project-specific paths hard-coded;
-#   all knobs go through env vars.
-#   See docs/scope-memos/v0.7.0-bridge-enforcement-2026-05-15.md.
+# Scope (2026-05-29): this hook intercepts the Read tool ONLY. The Bash
+# command-scanning branch was REMOVED (S5) — regex-parsing shell command
+# strings is structurally unsound (heredocs, command substitution,
+# quoting, chaining all defeat it) and produced frequent false-blocks.
+# Per the confirmed threat model — self-discipline / token economy, NOT
+# security (.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md) —
+# false-positives are the real cost and an honest agent rarely raw-cats
+# huge files, so the Bash branch was net-negative. The Read tool has a
+# clean structured `file_path` signature with no parsing ambiguity.
+# Shipped to users via the local-mcp-toolbelt plugin (hooks/hooks.json).
+# Knobs stay generic (env vars; no project-specific paths hard-coded).
 #
 # Reads hook input JSON from stdin. Exits 0 to allow, exits 2 to block
 # (the host shows stderr to the model and forces it to adapt).
@@ -75,11 +79,6 @@
 #   OMCP_HOOK_TASK_OUTPUT_RE            ERE matching agent task-output paths
 #                                       (empty string disables; default
 #                                       matches /claude-<uid>/.../tasks/*.output)
-#   OMCP_HOOK_NON_READER_FIRST_RE       ERE matching commands whose first
-#                                       word(s) are definitively NOT readers
-#                                       (e.g. `git commit`, `gh pr create`)
-#                                       and should skip the Bash scan entirely
-#                                       (empty string disables exemption)
 
 set -euo pipefail
 
@@ -105,22 +104,6 @@ EXTRA_ALLOWED_RAW="${OMCP_HOOK_EXTRA_ALLOWED_PREFIXES:-}"
 # root). Disable with OMCP_HOOK_TASK_OUTPUT_RE="".
 DEFAULT_TASK_OUTPUT_RE='/claude-[0-9]+/[^/]+/[^/]+/tasks/[^/]+\.output$'
 TASK_OUTPUT_RE="${OMCP_HOOK_TASK_OUTPUT_RE-$DEFAULT_TASK_OUTPUT_RE}"
-
-# B1 stop-gap: first-word non-reader allowlist. Some commands are
-# message-taking (e.g. `git commit -m "..."`, `gh pr create -b "..."`)
-# or otherwise definitively NOT readers, yet contain reader-shape
-# substrings — e.g. `git commit -m "$(cat <<EOF ... <path> ... EOF)"`
-# false-triggers the scan because `(cat` matches the reader regex AND
-# the heredoc body contains a path-shape token. When the first word(s)
-# of the command match this regex, the Bash scan is skipped entirely.
-#
-# Limitation: a non-reader prefix chained to a real reader (e.g.
-# `git commit -m "x"; cat /sensitive`) still bypasses the scan via
-# this exemption. The thorough fix is shfmt-AST parsing; this stop-gap
-# addresses the documented `git commit` heredoc false-block — see
-# .claude/brainstorm/bridge-hook-git-commit-evidence-2026-05-28.md.
-DEFAULT_NON_READER_FIRST_RE='^[[:space:]]*(git[[:space:]]+(commit|tag|notes)|gh[[:space:]]+(issue|pr|release)[[:space:]]+create|hub[[:space:]]+(issue|pull-request|release)[[:space:]]+create)([[:space:]]|$)'
-NON_READER_FIRST_RE="${OMCP_HOOK_NON_READER_FIRST_RE-$DEFAULT_NON_READER_FIRST_RE}"
 
 # Without a project root we can't tell internal vs external. Under-enforce
 # rather than block all reads in a misconfigured shell.
@@ -355,42 +338,6 @@ case "$TOOL_NAME" in
     PATH_ABS="$(resolve_path "$PATH_RAW")"
     [ -z "$PATH_ABS" ] && exit 0
     check_path "$PATH_ABS"
-    exit 0
-    ;;
-
-  Bash)
-    CMD="$(jq -r '.tool_input.command // ""' <<<"$INPUT")"
-    # B1 stop-gap: first-word non-reader allowlist. Commands that take a
-    # message body (`git commit -m`, `gh pr create -b`, ...) are NOT readers
-    # but may contain reader-shape substrings — e.g.
-    # `git commit -m "$(cat <<EOF ... EOF)"` false-triggers the scan because
-    # `(cat` matches the reader regex AND the heredoc body may contain
-    # path-shape tokens. Skip the scan entirely for these first-word matches.
-    # See config block + evidence memo for the known chain-bypass limitation.
-    if [ -n "$NON_READER_FIRST_RE" ] && printf '%s' "$CMD" | grep -qE "$NON_READER_FIRST_RE"; then
-      exit 0
-    fi
-    # Reader-command vocabulary at command position (start or after
-    # |, ;, &&, ||, open-paren). Quoted occurrences inside strings are
-    # ignored.
-    READER_RE='(^|[|;&(])[[:space:]]*(cat|head|tail|less|more|awk|sed|grep|rg|jq|yq|xxd|od|hexdump|strings|tac|rev|nl|cut)[[:space:]]'
-    if ! printf '%s ' "$CMD" | grep -qE "$READER_RE"; then
-      exit 0
-    fi
-    # Strip redirection targets — `> path`, `>> path`, `2> path` are
-    # writes, not reads.
-    CMD_SCAN="$(printf '%s' "$CMD" | sed -E 's|[0-9]?>>?[[:space:]]*[^[:space:]|;&]+||g')"
-    while read -r tok; do
-      tok="${tok#\"}"; tok="${tok%\"}"
-      tok="${tok#\'}"; tok="${tok%\'}"
-      case "$tok" in
-        "/tmp/"*|"/var/"*|"~/"*|"/Users/"*|"/etc/"*|"${CLAUDE_PROJECT_DIR}/"*)
-          PATH_ABS="$(resolve_path "$tok")"
-          [ -z "$PATH_ABS" ] && continue
-          check_path "$PATH_ABS"
-          ;;
-      esac
-    done < <(printf '%s\n' "$CMD_SCAN" | tr -s '[:space:]' '\n')
     exit 0
     ;;
 

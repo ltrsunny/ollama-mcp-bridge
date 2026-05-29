@@ -50,36 +50,33 @@ JSONEOF
     assert_exit "A4.2 Read external still exits 2 (reverse)" 2 "$?"
 fi
 
-# ----------- B1: first-word non-reader allowlist --------------------------
-echo "[B1 -- first-word non-reader allowlist]"
+# ----------- S5: Bash command scanning removed ----------------------------
+# Replaces the former B1 first-word-allowlist tests. S5 (2026-05-29) dropped
+# the Bash branch entirely — enforcement now lives ONLY at the structured
+# Read boundary. Per the confirmed self-discipline threat model, an honest
+# agent rarely raw-cats huge files, and command-string parsing was the
+# dominant false-positive source (heredoc, reader-verb-tail, chaining).
+echo "[S5 -- Bash command scanning removed]"
 
-# Positive: git commit with heredoc-cat + external path token in message body.
-# Pre-fix: `(cat` triggered READER_RE -> path /Users/rd/.claude.json scanned
-# -> external+>1KB -> blocked. With B1: first-word `git commit` allowlisted
-# -> scan skipped entirely.
-bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Bash","tool_input":{"command":"git commit -m \"$(cat <<EOF /Users/rd/.claude.json EOF)\""}}
-JSONEOF
-assert_exit "B1.1 git commit heredoc-cat with external path body exits 0 (B1 exempts)" 0 "$?"
-
-# Reverse: pure reader call still blocks.
+# Bash cat of an external file is NO LONGER scanned -> exits 0.
 bash "$HOOK" 2>/dev/null <<'JSONEOF'
 {"tool_name":"Bash","tool_input":{"command":"cat /Users/rd/.claude.json"}}
 JSONEOF
-assert_exit "B1.2 cat external still exits 2 (reverse: real reads still blocked)" 2 "$?"
+assert_exit "S5.1 Bash cat external exits 0 (Bash branch removed)" 0 "$?"
 
-# Reverse: git status (not in allowlist, no reader at command position) allowed.
+# The whole git-commit-heredoc false-block class is gone by construction.
 bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Bash","tool_input":{"command":"git status -s"}}
-JSONEOF
-assert_exit "B1.3 git status (not allowlist, no reader) exits 0 (normal allow)" 0 "$?"
-
-# Reverse: disable exemption via env -> verify pre-B1 behavior reproduces
-# (i.e. with the exemption off, B1.1 must block again).
-OMCP_HOOK_NON_READER_FIRST_RE='' bash "$HOOK" 2>/dev/null <<'JSONEOF'
 {"tool_name":"Bash","tool_input":{"command":"git commit -m \"$(cat <<EOF /Users/rd/.claude.json EOF)\""}}
 JSONEOF
-assert_exit "B1.4 same case with exemption disabled exits 2 (pre-B1 reproduced)" 2 "$?"
+assert_exit "S5.2 git commit heredoc exits 0 (no Bash scanning, no false-block)" 0 "$?"
+
+# Enforcement preserved where it's structured: Read of the SAME external
+# file STILL blocks. That is the point of S5 — move enforcement off the
+# leaky Bash string-scan onto the clean Read signature.
+bash "$HOOK" 2>/dev/null <<'JSONEOF'
+{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
+JSONEOF
+assert_exit "S5.3 Read same external still exits 2 (enforcement preserved on Read)" 2 "$?"
 
 # ----------- B3: dynamic error text ---------------------------------------
 echo "[B3 -- dynamic error text]"
