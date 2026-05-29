@@ -109,3 +109,53 @@ diminishes the breadth/depth that the fanout was supposed to provide.
 - Same fanout, working tools: `_retry 2` (gem 503 → retry → success),
   `_ghm_pick_model` (chose meta/llama-4-maverick-17b high tier),
   `agy_pro` (clean run), fanout PID-wait fix (G2 catch)
+
+## Update 2026-05-29 — G4 fanout surfaced two more bugs
+
+Re-ran `fanout` for G4 (5 voices: copilot_pro + ghm_pro + agy_pro +
+nv_pro + gem). The original picker symptom **varied** between runs,
+and two additional tooling bugs surfaced.
+
+### Update on the original `_copilot_pick_model` symptom
+
+G3 winner = `claude-haiku-4.5`. G4 winner on a nearly-identical
+probe set = `gpt-4.1`. Different model across runs.
+Still mid-tier within "reason" (not the listed gpt-5.x / opus-4.x).
+Reinforces that the selection criterion is **not** "strongest model
+alive" — strengthens fix directions #3 (split `reason-fast` vs
+`reason-strong`) and #4 (surface the criterion in debug output).
+
+### Bug 2: `_retry` ignores HTTP `Retry-After` header
+
+G4 `ghm_pro` hit rate-limit. Server returned `retry-after: 59` and
+the picker dutifully printed it. `_retry` then waited **the
+hard-coded 1 second** before the next attempt, ignoring the header.
+
+Worked this run only because `_ghm_pick_model` re-selected a
+DIFFERENT model on retry (`deepseek-v3-0324` → `meta/llama-4-scout-17b`),
+so the rate-limit didn't reapply. If a rate-limit applies across
+models (per-PAT, per-quota-pool), the 1-second retry would thrash.
+
+**Fix sketch**: parse the `retry-after` value from the printed quota
+line (already detected by `_ghm_pick_model`) and pass it through to
+`_retry` as a delay floor, capped at e.g. 30 s for sanity.
+
+### Bug 3: `_nim_pick_model` no language-preference filter
+
+G4 `nv_pro` picked `stockmark/stockmark-2-100b-instruct` — a
+primarily Japanese model — for an English-language brief. The voice
+returned its critique in **Chinese** (model's secondary language).
+Quality of analysis was OK but cross-language switching adds
+friction in multi-voice review and risks losing nuance for English-
+context tasks.
+
+**Fix sketch**: `_nim_pick_model` accepts an optional `lang=en`
+(default for callers like `fanout`) filter, or inspects the model's
+documented primary language at probe time and prefers matches.
+
+### Aggregate sister-side handoff payload
+
+This memo now documents three related tooling bugs. On next
+sister-session handoff: implement (1) `_copilot_pick_model`
+criterion surfacing + strong-tier preference, (2) `_retry`
+honoring `Retry-After`, (3) `_nim_pick_model` language filter.
