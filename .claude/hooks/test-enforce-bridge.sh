@@ -140,6 +140,25 @@ OMCP_HOOK_THRESHOLD_BYTES=1024 bash "$HOOK" 2>/dev/null <<JSONEOF
 JSONEOF
 assert_exit "B2.3 2KB external with old 1024 threshold exits 2 (pre-B2 reproduced)" 2 "$?"
 
+# ----------- T7: marker bootstrap caveat in analysis block ---------------
+echo "[T7 -- marker bootstrap caveat]"
+
+# Trigger emit_analysis_block via a project-internal data-extension (.log)
+# file over the analysis threshold. The data-file band is NOT lifted by the
+# edit-mode marker, so this assertion is independent of marker state.
+T7_FIX="$CLAUDE_PROJECT_DIR/.t7-fixture.log"
+yes "padding line to push the fixture over the analysis threshold" | head -c 5000 > "$T7_FIX"
+T7_OUT="$(bash "$HOOK" 2>&1 <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$T7_FIX"}}
+JSONEOF
+)"
+rm -f "$T7_FIX"
+if printf '%s' "$T7_OUT" | grep -q 'OWN command first'; then
+    PASS=$((PASS+1)); printf '  PASS  T7.1 analysis block documents marker-must-be-its-own-command\n'
+else
+    FAIL=$((FAIL+1)); printf '  FAIL  T7.1 analysis block missing marker bootstrap caveat\n'
+fi
+
 echo
 echo "----- summary -----"
 printf 'pass=%d fail=%d\n' "$PASS" "$FAIL"

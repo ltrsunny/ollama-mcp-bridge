@@ -312,6 +312,9 @@ For Edit-prerequisite reads (when bridge extract's schema is too
 brittle for old_string matching), lift this gate for ALL analysis
 paths during an active editing session:
   touch ${CLAUDE_PROJECT_DIR}/.claude/.bridge-edit-mode
+Run that as its OWN command first: this hook fires before any
+&&-chained reader runs, so "touch <marker> && <reader> <file>" stays
+blocked (the marker doesn't exist yet when the scan happens).
 Auto-expires after ${MARKER_EXPIRE_SEC}s (override via
 OMCP_HOOK_MARKER_EXPIRE_SEC). \`rm\` the marker when done — but a
 forgotten marker self-disarms on schedule. (Git-ignored.)
