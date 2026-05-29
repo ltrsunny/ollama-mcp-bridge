@@ -41,10 +41,9 @@ network. Blocking `cat /secret` while permitting `curl --data
 build an exfiltration boundary around a shell-enabled, trusted agent
 by string-scanning its commands.
 
-CITED-UNVERIFIED: whether the user ever *intended* (B). The user is
-the authority here — this memo's conclusion is PENDING USER
-CONFIRMATION. If the real goal is (B), the entire approach needs
-rethinking (and is likely futile under shell access).
+CONFIRMED BY USER 2026-05-29: purpose is (A) self-discipline / token
+economy. (B) security is explicitly NOT a goal. This memo's conclusion
+and the S5 direction are therefore unblocked — no longer pending.
 
 ## Conclusion: purpose = (A) self-discipline / token economy
 
@@ -96,8 +95,8 @@ Bash command-scanning branch (whole B1 class).
 
 ## Recommendation
 
-1. Confirm purpose (A) with the user (this memo's one open dependency).
-2. If confirmed → implement **S5**: keep `Read)` branch (external +
+1. Purpose (A) CONFIRMED by user 2026-05-29 — dependency cleared.
+2. Implement **S5**: keep `Read)` branch (external +
    analysis + data bands + A4 exemption + B3 dynamic message), DELETE
    the `Bash)` command-scanning branch entirely. This eliminates the
    B1 false-positive class by construction and needs no B1 allowlist,
