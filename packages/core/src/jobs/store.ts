@@ -1,5 +1,5 @@
 /**
- * Job Memory Bank — file-backed persistent store for v0.3.0 async jobs.
+ * Job Memory Bank — file-backed persistent store for async jobs.
  *
  * Files per job (under `<baseDir>/<job_id>`):
  *   - `<id>.json` — metadata sidecar: tool, args, status, timestamps,
@@ -13,8 +13,7 @@
  * GC: TTL-based, scanned at bridge startup and on demand. Default 7 days
  * since last mtime on the metadata file.
  *
- * No external deps — only `node:fs/promises` and `node:path`. p-queue and
- * nanoid land in the next commit alongside jobs/registry.ts.
+ * No external deps — only `node:fs/promises` and `node:path`.
  *
  * See docs/scope-memos/v0.3.0-async-jobs-and-diff-index.md §3, §6 for
  * design and failure-mode coverage.
@@ -40,7 +39,7 @@ export interface JobProgress {
 export interface JobMetadata {
   /** nanoid(10), path-safe. */
   job_id: string;
-  /** Whitelisted v0.2.0 tool name. Validated by the registry, not by the store. */
+  /** Allowed tool name. Validated by the registry, not by the store. */
   tool_name: string;
   /** Args forwarded to the wrapped tool. Stored verbatim for re-entry / debugging. */
   args: Record<string, unknown>;
@@ -64,7 +63,7 @@ export interface JobMetadata {
    * `resolveThinking()` in `src/config/thinking-defaults.ts`). When set,
    * the runner injects `thinking: thinking_resolved` into the wrapped
    * tool's `args` dict before invocation, so the underlying tool runs
-   * with the caller's intended thinking mode. v0.6.0+.
+   * with the caller's intended thinking mode.
    */
   thinking_resolved?: 'on' | 'off';
 }
@@ -81,7 +80,7 @@ export interface JobStoreOptions {
 /**
  * Pure file-store API. Stateless across method calls — every method does
  * fs I/O afresh. Concurrency is NOT serialized at this layer; the registry
- * (next commit) owns the in-memory locking.
+ * (jobs/registry.ts) owns the in-memory locking.
  */
 export class JobStore {
   readonly baseDir: string;

@@ -2,10 +2,9 @@
  * Backend factory — turns a (BridgeConfig, toolName) pair into a concrete
  * `LlmBackend` instance.
  *
- * v0.5.0: single backend (`MlxHttpBackend`). All tiers route through a local
- * oMLX server. The legacy Ollama and llama.cpp backends were removed in this
- * release — see `docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md` and
- * `docs/notes/v0.5.0-omlx-overlap-2026-05-07.md`.
+ * Single backend (`MlxHttpBackend`). All tiers route through a local oMLX
+ * server. See `docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md` and
+ * `docs/notes/v0.5.0-omlx-overlap-2026-05-07.md` for integration rationale.
  *
  * `MlxHttpBackend` instances are memoized per `(mlxUrl, mlxModelName)` so
  * Tier B / C / D pointing at the same oMLX endpoint share the same backend

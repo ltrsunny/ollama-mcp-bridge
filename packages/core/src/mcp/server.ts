@@ -26,7 +26,7 @@ import type { ProgressCaptureExtra } from '../jobs/progress-capture.js';
 
 /** Loose-typed handler stored in the toolHandlers Map for the runner to invoke
  *  on async-job execution. ProgressCaptureExtra is a structural subset of the
- *  SDK's RequestHandlerExtra; v0.2.0 handlers access only fields it provides. */
+ *  SDK's RequestHandlerExtra; handlers access only the fields it provides. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type CapturedToolHandler = (args: any, extra: ProgressCaptureExtra) => Promise<any>;
 
@@ -42,9 +42,9 @@ export interface BridgeServerOptions {
    */
   defendUntrusted?: boolean;
 
-  // ── v0.3.0 async jobs ────────────────────────────────────────────────────
+  // ── async jobs ────────────────────────────────────────────────────────────
   /** When provided alongside jobRunner, registers the async-job MCP tools
-   *  (enqueue-job in commit #4; wait_for_job + read_job_result in #5). */
+   *  (enqueue-job, wait_for_job, read_job_result, check_progress). */
   jobRegistry?: JobRegistry;
   /** Workhorse for actually running enqueued jobs. Pair with jobRegistry. */
   jobRunner?: JobRunner;
@@ -118,8 +118,8 @@ const DIFF_INDEX_SYSTEM =
 
 /**
  * Hardcoded JSON Schema for diff-semantic-index grammar-constrained output.
- * files_touched[].role uses a free-string (not enum) to avoid GBNF compiler
- * issues with enum-inside-array-items — values are coerced in the handler.
+ * files_touched[].role uses a free-string (not enum) to avoid oMLX json_schema
+ * strict-mode enum issues with enum-inside-array-items — values are coerced in the handler.
  */
 const DIFF_INDEX_OUTPUT_SCHEMA = {
   type: 'object',
@@ -162,7 +162,7 @@ const DIFF_INDEX_OUTPUT_SCHEMA = {
 // Values are *semantic* — what the tool reasonably needs — not tier-driven.
 //
 // The 60s MCP wall-clock interacts with these as: budget × tier-decode-rate.
-// Tier B (qwen3:4b ~80 tps) and Tier C (qwen2.5:7b ~50 tps) clear all
+// Tier B (~80 tps) and Tier C (~50 tps) clear all
 // budgets in <30 s.  Tier D (Qwen3-14B-MLX ~10-14 tps via oMLX) only fits
 // classify (200 tok ≈ 15 s) and extract/transform with shorter inputs.
 //
@@ -283,12 +283,11 @@ export function buildBridgeServer(
     version: options.version ?? '0.6.0',
   });
 
-  // ── tool-handler capture (v0.3.0) ─────────────────────────────────────────
+  // ── tool-handler capture ───────────────────────────────────────────────────
   // The async-job runner (when wired) invokes registered tool handlers via
   // this Map. Every registerCapturedTool call mirrors a server.registerTool
-  // call AND records the handler reference for later invocation. v0.2.0
-  // behavior unchanged — the Map is populated as a side effect; existing
-  // direct MCP tool calls go through the SDK as always.
+  // call AND records the handler reference for later invocation. Direct MCP
+  // tool calls go through the SDK as always; the Map is populated as a side effect.
   const toolHandlers = options.toolHandlers ?? new Map<string, CapturedToolHandler>();
   const registerCapturedTool = (
     name: string,
@@ -308,7 +307,7 @@ export function buildBridgeServer(
   registerCapturedTool(
     'summarize',
     {
-      title: 'Summarize text via local Ollama',
+      title: 'Summarize text via a local model',
       description:
         'DELEGATION GUIDANCE: delegate short-to-medium summarization (up to ~2000 words) ' +
         'to a local model. Produces plain-prose output. Data stays local. ' +
@@ -396,7 +395,7 @@ export function buildBridgeServer(
   registerCapturedTool(
     'summarize-long',
     {
-      title: 'Summarize long documents via local Ollama (larger model)',
+      title: 'Summarize long documents via a local model (larger model)',
       description:
         'DELEGATION GUIDANCE: delegate long-document summarization (~2000+ words) to a ' +
         'larger local model (Tier C). Produces 1-2 sentence lead + 3-6 bullet points. ' +
@@ -480,7 +479,7 @@ export function buildBridgeServer(
     },
   );
 
-  // ── summarize-long-chunked (v0.2.0) ──────────────────────────────────────
+  // ── summarize-long-chunked ───────────────────────────────────────────────
   registerCapturedTool(
     'summarize-long-chunked',
     {
@@ -536,7 +535,7 @@ export function buildBridgeServer(
           // The Tier-1 regex classifier (always-on) and NFKC normalization
           // already ran on the full source and pass/fail the call before
           // any chunking; we accept losing spotlighting on the per-chunk
-          // model calls as a v0.2.0 trade-off.
+          // model calls as an accepted trade-off.
         }
         const chunkSize = parseEnvInt('OMCP_CHUNK_SIZE');
         const chunkOverlap = parseEnvInt('OMCP_CHUNK_OVERLAP');
@@ -615,7 +614,7 @@ export function buildBridgeServer(
   registerCapturedTool(
     'classify',
     {
-      title: 'Classify text into categories via local Ollama',
+      title: 'Classify text into categories via a local model',
       description:
         'DELEGATION GUIDANCE: delegate text classification to a local model. ' +
         'The model is grammar-constrained to emit only labels from the provided category list — ' +
@@ -704,14 +703,14 @@ export function buildBridgeServer(
   registerCapturedTool(
     'extract',
     {
-      title: 'Extract structured data from text via local Ollama',
+      title: 'Extract structured data from text via a local model',
       description:
         'DELEGATION GUIDANCE: delegate structured-data extraction to a local model. ' +
         'Pass a JSON Schema object; the model is grammar-constrained to produce output ' +
         'matching that schema. Supports flat objects, nested objects, arrays, enums, ' +
         'minLength/maxLength/minItems/maxItems, anyOf unions (structural only — for reliable ' +
         'branch selection prefer z.discriminatedUnion). ' +
-        'Constraints that crash the grammar compiler (pattern, format:email/uri/date-time, ' +
+        'Constraints rejected by the local model\'s strict json_schema mode (pattern, format:email/uri/date-time, ' +
         'multipleOf) are automatically stripped and surfaced in _meta.schema_stripped. ' +
         'Data stays local. ' +
         'TOKEN SAVINGS: real frontier-token savings require source_uri — inline `text` that ' +
@@ -728,7 +727,7 @@ export function buildBridgeServer(
         ),
         schema: z.record(z.string(), z.unknown()).describe(
           'JSON Schema object describing the desired output. Obtain via z.toJSONSchema(yourSchema). ' +
-          'Avoid z.email(), z.url(), z.string().regex() — they crash Ollama\'s grammar compiler.',
+          'Avoid z.email(), z.url(), z.string().regex() — they are rejected by the local model\'s strict json_schema mode.',
         ),
         thinking: ThinkingInputSchema,
       },
@@ -817,7 +816,7 @@ export function buildBridgeServer(
   registerCapturedTool(
     'transform',
     {
-      title: 'Rewrite or transform text via local Ollama',
+      title: 'Rewrite or transform text via a local model',
       description:
         'DELEGATION GUIDANCE: delegate text rewriting to a local model. ' +
         'Apply any natural-language instruction: translate, summarize into a different format, ' +
@@ -901,7 +900,7 @@ export function buildBridgeServer(
     },
   );
 
-  // ── diff-semantic-index (v0.3.0 feature #2) ───────────────────────────────
+  // ── diff-semantic-index ───────────────────────────────────────────────────
   registerCapturedTool(
     'diff-semantic-index',
     {
@@ -909,7 +908,7 @@ export function buildBridgeServer(
       description:
         'Parse a `git diff` into a typed JSON summary: change_type, 1-sentence summary, ' +
         'per-file roles and line counts, key architectural decisions, risk callouts, and ' +
-        'a test_coverage_hint. Tier B (qwen3:4b), grammar-constrained output. ' +
+        'a test_coverage_hint. Tier B, schema-constrained output. ' +
         'TOKEN LIMIT: estimated input tokens > 7 000 returns isError with a hint to use ' +
         'enqueue-job + summarize-long-chunked to reduce the diff first. ' +
         'USAGE: pass diff_text for small diffs or source_uri=file:///tmp/my.diff for large ones ' +
@@ -1024,7 +1023,7 @@ export function buildBridgeServer(
           };
         }
 
-        // Coerce files_touched[].role to valid enum (GBNF may produce free strings).
+        // Coerce files_touched[].role to valid enum (free-string field may produce non-enum values).
         const VALID_ROLES = new Set(['added', 'modified', 'deleted', 'renamed']);
         if (Array.isArray(output['files_touched'])) {
           for (const f of output['files_touched'] as Array<Record<string, unknown>>) {
@@ -1073,10 +1072,9 @@ export function buildBridgeServer(
     },
   );
 
-  // ── v0.3.0 async-job tools ─────────────────────────────────────────────────
+  // ── async-job tools ────────────────────────────────────────────────────────
   // Registered only when both jobRegistry AND jobRunner are provided. Tests
-  // that don't need async machinery omit them and the v0.2.0 surface stays
-  // identical.
+  // that don't need async machinery omit them.
   if (options.jobRegistry && options.jobRunner) {
     const jobRegistry = options.jobRegistry;
     const jobRunner = options.jobRunner;
@@ -1097,7 +1095,7 @@ export function buildBridgeServer(
         title: 'Long-poll for async job completion (v0.3.0; deprecated by check_progress in v0.6.0)',
         description:
           '[DEPRECATED in v0.6.0] Prefer `check_progress` (portable across MCP clients, instant return) or the `wait_command` Bash one-liner returned by `enqueue_job` when your client advertises bash. Still maintained for v0.3.0 callers through v0.6.x; planned removal in a future major. ' +
-          'Block up to max_wait_ms (default and server-cap 45 s, OMCP_WAIT_CAP_MS overrides up to 50 s) for an enqueued job to finish. Returns immediately when the job becomes done/failed. If the cap is reached, returns status: running so the caller can call again. Cap is below the 60 s MCP wall to leave margin for transport round-trip + event-loop lag under heavy Ollama load. ' +
+          'Block up to max_wait_ms (default and server-cap 45 s, OMCP_WAIT_CAP_MS overrides up to 50 s) for an enqueued job to finish. Returns immediately when the job becomes done/failed. If the cap is reached, returns status: running so the caller can call again. Cap is below the 60 s MCP wall to leave margin for transport round-trip + event-loop lag under heavy local model load. ' +
           'Client-disconnect resilience: if the calling MCP client aborts mid-wait, the underlying job continues — re-attach via another wait_for_job(same_id) or read_job_result.',
         inputSchema: {
           job_id: z.string().min(1).describe('The job_id returned from enqueue-job.'),
@@ -1239,11 +1237,10 @@ export function buildBridgeServer(
             ],
           };
         }
-        // v0.6.0: inline-content is the primary path (works on sandboxed
-        // clients that can't read file://). For very large results (e.g.
-        // chunked summaries of book-length sources) the bridge returns the
-        // file path instead. Threshold defaults to 1 MB; configurable via
-        // OMCP_INLINE_RESULT_MAX_BYTES.
+        // Inline-content is the primary path (works on sandboxed clients that
+        // can't read file://). For very large results (e.g. chunked summaries
+        // of book-length sources) the bridge returns the file path instead.
+        // Threshold defaults to 1 MB; configurable via OMCP_INLINE_RESULT_MAX_BYTES.
         const inlineMaxBytes = (() => {
           const raw = process.env['OMCP_INLINE_RESULT_MAX_BYTES'];
           const parsed = raw !== undefined ? Number(raw) : NaN;
@@ -1276,7 +1273,7 @@ export function buildBridgeServer(
       },
     );
 
-    // ── v0.6.0 check_progress ─────────────────────────────────────────────
+    // ── check_progress ────────────────────────────────────────────────────
     // Lightweight cross-client status poll. Each call is one MCP roundtrip,
     // returns instantly (<100 ms). Use when the caller is not on Claude Code
     // (which can use the wait_command Bash one-liner from enqueue_job)
@@ -1285,7 +1282,7 @@ export function buildBridgeServer(
     server.registerTool(
       'check_progress',
       {
-        title: 'Lightweight non-blocking status check for an async job (v0.6.0+)',
+        title: 'Lightweight non-blocking status check for an async job',
         description:
           'Cross-client universal poll: returns the current status of a job ' +
           'without blocking. Each call is one MCP roundtrip, instant (<100 ms). ' +
@@ -1348,7 +1345,7 @@ export function buildBridgeServer(
           'Idempotency: enqueue-job dedupes by hash(tool_name + args) — repeated calls with identical args while a prior job is still queued/running return the existing job_id, not a fresh one.',
         inputSchema: {
           tool_name: z.enum(ASYNC_TOOL_WHITELIST).describe(
-            'Which v0.2.0 tool to run as a job. Whitelisted to prevent recursion or self-reference.',
+            'Which tool to run as a job. Whitelisted to prevent recursion or self-reference.',
           ),
           args: z.record(z.string(), z.unknown()).describe(
             'Args object forwarded verbatim to the wrapped tool. Validated by the wrapped tool at execution time (errors surface in job status, not at enqueue).',
@@ -1391,10 +1388,10 @@ export function buildBridgeServer(
       },
     );
 
-    // ── v0.6.0 enqueue_job ────────────────────────────────────────────────
+    // ── enqueue_job ──────────────────────────────────────────────────────
     // New snake-case tool name matches sister tools (wait_for_job /
-    // read_job_result). Strict superset of v0.3.0 `enqueue-job`:
-    //  - Accepts `thinking?: 'on'|'off'|'auto'` per scope memo v0.6.0 §3.1
+    // read_job_result). Strict superset of `enqueue-job`:
+    //  - Accepts `thinking?: 'on'|'off'|'auto'`
     //  - Computes `thinking_resolved` via resolveThinking(); the runner
     //    injects it into args before invoking the wrapped tool, so the
     //    wrapped tool runs under the caller's intended thinking mode.
@@ -1402,22 +1399,20 @@ export function buildBridgeServer(
     //    and, when the client advertises bash capability, a `wait_command`
     //    Claude-Code-friendly one-liner.
     //
-    // v0.3.0 `enqueue-job` stays registered for backward compat; Day 4
-    // will mark it deprecated in description. v0.7+ removes it.
-    //
-    // Forward-compat (scope memo §3 head note): this triad is a temporary
-    // compat layer for clients that don't yet support MCP Tasks SEP-2663.
-    // When SEP stabilizes + a major client ships native task return, the
-    // entire triad sunsets.
+    // `enqueue-job` stays registered for backward compat (deprecated in
+    // description). Forward-compat note: this triad is a temporary compat
+    // layer for clients that don't yet support MCP Tasks SEP-2663. When
+    // SEP stabilizes + a major client ships native task return, the entire
+    // triad sunsets.
     server.registerTool(
       'enqueue_job',
       {
-        title: 'Enqueue a long-running tool call as a background job (v0.6.0)',
+        title: 'Enqueue a long-running tool call as a background job',
         description:
           'DELEGATION GUIDANCE: use this when a regular tool call would exceed your MCP ' +
           'client request timeout (Claude Code: ~60 s). The job runs in the background; ' +
           'you receive a job_id + result_uri immediately. ' +
-          'POLLING: use check_progress(job_id) to check status (v0.6.0+) or wait_for_job ' +
+          'POLLING: use check_progress(job_id) to check status or wait_for_job ' +
           '(v0.3.0 long-poll, deprecated). Fetch the body with read_job_result(job_id). ' +
           'BASH FAST-PATH: when the server returns wait_command (env OMCP_ASSUME_BASH_CLIENT=1 ' +
           'or future MCP capability handshake), Claude Code clients can paste it into Bash ' +
@@ -1430,7 +1425,7 @@ export function buildBridgeServer(
           'existing job_id, not a fresh one.',
         inputSchema: {
           tool: z.enum(ASYNC_TOOL_WHITELIST).describe(
-            'Which v0.2.0/v0.5.0 tool to run as a job. Whitelisted to prevent recursion or self-reference.',
+            'Which tool to run as a job. Whitelisted to prevent recursion or self-reference.',
           ),
           args: z.record(z.string(), z.unknown()).describe(
             'Args object forwarded verbatim to the wrapped tool. The runner additionally ' +
@@ -1467,7 +1462,7 @@ export function buildBridgeServer(
           const expiresAt = new Date(
             new Date(meta.enqueued_at).getTime() + meta.ttl_days * 86400_000,
           ).toISOString();
-          // Capability detection (Day 2: env var stub; future: MCP handshake).
+          // Capability detection: env var stub today; future: MCP handshake.
           // POSIX-only one-liner (no [[, no zsh-isms) — portable across
           // /bin/sh, bash, zsh that Claude Code might invoke.
           //
@@ -1480,7 +1475,7 @@ export function buildBridgeServer(
           // closing-quote escape sequence `'\''` lets a literal quote
           // appear without breaking out of the wrap. Adversarial review
           // (gem/copilot/nv_pro) all flagged unquoted interpolation as
-          // revert-worthy; this fix lands ahead of Day 4.
+          // revert-worthy.
           const bashCapable = process.env['OMCP_ASSUME_BASH_CLIENT'] === '1';
           const wait_command = bashCapable
             ? `while [ ! -f ${bashSingleQuote(resultPath)} ]; do sleep 5; done; cat ${bashSingleQuote(resultPath)}`
@@ -1523,7 +1518,7 @@ export async function runBridgeServerStdio(
   // up so MCP clients can list tools and retry once the user starts oMLX
   // (`brew services start jundot/omlx/omlx`).
 
-  // ── v0.3.0 async-job machinery ────────────────────────────────────────────
+  // ── async-job machinery ───────────────────────────────────────────────────
   // Construct store + registry + runner before the server so they can be
   // injected via options. The toolHandlers Map is shared by reference: the
   // server populates it during registerCapturedTool calls, the runner reads
@@ -1547,8 +1542,8 @@ export async function runBridgeServerStdio(
   }
 
   const toolHandlers = new Map<string, CapturedToolHandler>();
-  // ToolInvoker closes over the toolHandlers Map. By the time enqueue-job
-  // schedules a call, the Map is fully populated by buildBridgeServer.
+  // ToolInvoker closes over the toolHandlers Map. By the time enqueue_job (or
+  // enqueue-job) schedules a call, the Map is fully populated by buildBridgeServer.
   const jobRunner = new JobRunner(
     jobRegistry,
     async (toolName, args, extra) => {

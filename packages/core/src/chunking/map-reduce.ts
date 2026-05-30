@@ -74,7 +74,7 @@ export const FAST_PATH_TIMEOUT_MS = 200_000;
 
 /**
  * Max prompt-token budget for a single REDUCE call. Sized so that
- * prompt-eval (≈ 6.4 s/1 K on qwen2.5:7b) + reduce-output generation
+ * prompt-eval (≈ 6.4 s/1 K on oMLX Tier C) + reduce-output generation
  * (≈ 26.7 s for 400 tokens at thermal-throttled 15 t/s) finish under
  * PER_CALL_TIMEOUT_MS even on a loaded 16 GB Mac. See scope memo §5.2
  * "Why the bucket budget shrinks across drafts".
@@ -121,7 +121,7 @@ export interface ChunkedSummarizeOptions {
    * REDUCE, partial-REDUCE, recursive REDUCE). When `true`, suppresses
    * the model's reasoning trace (`/no_think` suffix). When `false`,
    * thinking is allowed. When `undefined`, the backend falls back to
-   * env-var / its own default. v0.6.0+.
+   * env-var / its own default.
    */
   disableThinking?: boolean;
   /** Optional progress callback wired to MCP `sendProgress`. */

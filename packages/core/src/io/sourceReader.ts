@@ -77,9 +77,8 @@ function isAllowedContentType(raw: string): boolean {
 // ── SSRF: private-IP detection (hostname-level, pre-DNS) ─────────────────────
 //
 // Note: this protects against naive SSRF. A DNS-rebinding attack (public
-// hostname that resolves to a private IP) bypasses this check. For the
-// v0.1.2 scope this is considered acceptable; OMCP_URL_HOSTS allowlist
-// mode provides stronger mitigation if needed.
+// hostname that resolves to a private IP) bypasses this check; OMCP_URL_HOSTS
+// allowlist mode provides stronger mitigation if needed.
 
 const LOCALHOST_NAMES = new Set(['localhost', '::1', '0.0.0.0', '']);
 

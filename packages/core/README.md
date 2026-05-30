@@ -42,7 +42,7 @@ npm run download-models
 #   Qwen3-4B-Instruct-2507-4bit  (Tier B, ~2.5 GB)
 #   Qwen3-8B-4bit                (Tier C, ~5 GB)
 #
-# Power-user opt-in for Tier D (demoted in v0.6.0 — 24+ GB Mac only):
+# Power-user opt-in for Tier D (24+ GB Mac only):
 npm run download-models -- --tiers B,C,D
 #   + Qwen3-14B-4bit             (Tier D, ~5 GB more)
 ```
@@ -92,7 +92,7 @@ local-mcp-toolbelt serve --tier-b-model M  # Override Tier B model name
 | `OMCP_MLX_URL` | `http://127.0.0.1:8000` | oMLX server URL |
 | `OMCP_TIER_B_MODEL` | `Qwen3-4B-Instruct-2507-4bit` | Tier B model name |
 | `OMCP_TIER_C_MODEL` | `Qwen3-8B-4bit` | Tier C model name |
-| `OMCP_TIER_D_MODEL` | `Qwen3-14B-4bit` | Tier D model name (demoted v0.6.0 — power-user opt-in) |
+| `OMCP_TIER_D_MODEL` | `Qwen3-14B-4bit` | Tier D model name (power-user opt-in only) |
 | `OMCP_URL_MAX_BYTES` | `10485760` | Max `http(s)://` body size |
 | `OMCP_URL_TIMEOUT_MS` | `30000` | Fetch timeout (ms) |
 | `OMCP_URL_DENY_PRIVATE` | `1` | Block private/loopback hosts (SSRF) |

@@ -1,10 +1,10 @@
 /**
- * LlmBackend — neutral contract for any local-LLM backend.
+ * LlmBackend — neutral contract for local-LLM backends.
  *
- * v0.2.0 ships only one implementation (`OllamaBackend`). v0.3.0 will add
- * `LlamaCppBackend`. The interface is deliberately narrow: anything
- * Ollama-specific (keep-alive, the qwen3 `think` flag, native option names
- * like `num_ctx`) belongs in the concrete class, not on the interface.
+ * The sole current implementation is `MlxHttpBackend`. The interface is
+ * deliberately narrow: anything backend-specific (server options, native
+ * option names, model-load parameters) belongs in the concrete class, not
+ * here.
  *
  * See docs/scope-memos/v0.2.0-backend-abstraction-and-chunked-summarize.md §3.
  */
@@ -21,42 +21,39 @@ export interface ChatOptions {
   temperature?: number;
   /**
    * Max tokens the backend should admit from the prompt.
-   * Maps to: Ollama `num_ctx`, llama.cpp `-c` / per-slot context size.
-   * This is a per-call budget, not a model-load-time parameter — backends
-   * with a load-time ceiling (llama-server) MUST verify the call's value
-   * is within their loaded ceiling.
+   * This is a per-call budget hint; the server-side model context is fixed
+   * at load time. Used by the chunker's safety margin and tool maxInputTokens.
    */
   maxInputTokens: number;
   /** Max tokens to generate. Absent = backend default. */
   maxOutputTokens?: number;
   /**
-   * Grammar-constrained output schema. Interface takes JSON Schema; concrete
-   * backends adapt to their native format (Ollama: `format:`, llama.cpp:
-   * GBNF — translation is the v0.3.0 LlamaCppBackend's responsibility).
+   * Grammar-constrained output schema. Interface takes JSON Schema; the
+   * backend adapts to its native format. `MlxHttpBackend` sends
+   * `response_format: { type: "json_schema", strict: true }` to oMLX,
+   * which enforces the schema at decode time.
    */
   format?: JsonSchemaLike;
   /**
    * Disable the model's reasoning trace (e.g. Qwen3 thinking-mode
    * `<think>...</think>` output). When `true`, MlxHttpBackend appends
    * `/no_think` to the user prompt; when `false`, the prompt is left
-   * alone and the model is free to reason. When `undefined`, backends
-   * fall back to their internal default (currently the env var
-   * `OMCP_THINKING_MODE`).
+   * alone and the model is free to reason. When `undefined`, falls back
+   * to the env var `OMCP_THINKING_MODE`.
    *
-   * Server.ts (v0.6.0+) computes this via the per-tool registry in
-   * `src/config/thinking-defaults.ts` so that callers don't have to
+   * server.ts computes this via the per-tool registry in
+   * `src/config/thinking-defaults.ts` so callers don't have to
    * know which models are thinking-capable. See scope memo v0.6.0 §4.
    */
   disableThinking?: boolean;
-  // NOTE: `stopSequences` deferred until a real consumer needs it. v0.3.0
-  // LlamaCppBackend may surface it; until then keep the interface minimal.
+  // NOTE: `stopSequences` deferred until a real consumer needs it; keep the interface minimal.
 }
 
 export interface ChatResult {
   text: string;
-  /** Tokens used to encode the prompt (Ollama: `prompt_eval_count`). */
+  /** Tokens used to encode the prompt (from response `usage.prompt_tokens`). */
   promptTokens: number;
-  /** Tokens generated in the completion (Ollama: `eval_count`). */
+  /** Tokens generated in the completion (from response `usage.completion_tokens`). */
   completionTokens: number;
 }
 

@@ -33,13 +33,13 @@ export const META_NS = 'dev.localmcptoolbelt' as const;
 
 /** Input for buildMeta(). Always-required fields + optional conditional ones. */
 export interface MetaInput {
-  /** Resolved Ollama model tag (e.g. "qwen3:4b-instruct-2507-q4_K_M"). */
+  /** Resolved model tag (e.g. "qwen3:4b-instruct-2507-q4_K_M"). */
   model: string;
   /** Tier key used for routing ("B" | "C"). */
   tier: Tier;
   /** End-to-end wall-clock latency in milliseconds. */
   latencyMs: number;
-  /** Token counts from the Ollama response. */
+  /** Token counts from the model response. */
   result: Pick<ChatResult, 'promptTokens' | 'completionTokens'>;
 
   // ── F4 defender (optional) ──────────────────────────────────────────────
@@ -67,7 +67,7 @@ export interface MetaInput {
    */
   savedInputTokensEstimate?: number;
 
-  // ── v0.2.0 chunked summarization (optional) ─────────────────────────────
+  // ── chunked summarization (optional) ────────────────────────────────────
   /** Stats from a map-reduce chunked summarize job. Set only by `summarize-long-chunked`. */
   chunked?: {
     /** Number of chunks the source was split into. 1 means fast-path was taken. */

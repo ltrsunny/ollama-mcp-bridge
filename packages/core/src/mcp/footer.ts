@@ -22,9 +22,8 @@ export interface FooterOptions {
   /** Only present when source_uri was used (F2). Omit for text-arg calls. */
   savedTokensEstimate?: number;
   /**
-   * Only present for `summarize-long-chunked` (v0.2.0+). Number of chunks
-   * the source was split into in the MAP phase. 1 means the fast-path was
-   * taken (no chunking).
+   * Only present for `summarize-long-chunked`. Number of chunks the source
+   * was split into in the MAP phase. 1 means the fast-path was taken (no chunking).
    */
   chunks?: number;
   /** Only set true when `summarize-long-chunked` returned a partial result. */

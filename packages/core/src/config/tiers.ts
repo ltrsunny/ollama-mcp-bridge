@@ -5,11 +5,11 @@
  * size/latency buckets, not capability buckets — the tool decides which
  * tier it wants based on expected workload (short classify vs long summary).
  *
- * v0.5.0: ALL tiers route through `MlxHttpBackend` to a local oMLX
+ * All tiers route through `MlxHttpBackend` to a local oMLX
  * (https://github.com/jundot/omlx) inference server. Single backend, single
  * inference engine, KV-cache persistence across requests, schema strictness
  * via OpenAI Structured Outputs (`response_format: { type: "json_schema",
- * strict: true }`). The legacy Ollama and llama.cpp backends were removed.
+ * strict: true }`).
  *
  * Default models (mlx-community on Hugging Face):
  * - Tier B: `Qwen3-4B-Instruct-2507-4bit` (~2.5 GB) — non-thinking variant.
@@ -108,14 +108,10 @@ export const DEFAULT_CONFIG: BridgeConfig = {
     // just adds map-reduce orchestration on top.
     'summarize-long-chunked': 'C',
     // classify / extract / transform default to Tier B (defaultTier).
-    // Tier D (`Qwen3-14B-4bit`) was promoted in v0.5.0 (per
-    // docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md) as an opt-in
-    // for classify+transform short cases. **Demoted in v0.6.0** —
-    // 4-bit 14B (~7-8 GB) + 6 GB hot_cache OOM-prone on 16 GB Mac
-    // target hardware; v0.6.0 async triad erodes the 60 s wall pressure
-    // that motivated the promotion. Tier D remains routable via a
-    // user-supplied `toolTierMap` override (24+ GB Mac power-user
-    // path) but no longer documented as a default.
+    // Tier D (`Qwen3-14B-4bit`) is opt-in — 4-bit 14B (~7-8 GB) +
+    // 6 GB hot_cache is OOM-prone on 16 GB Mac target hardware. Routable
+    // via a user-supplied `toolTierMap` override (24+ GB Mac power-user
+    // path) but not mapped here.
   },
 };
 

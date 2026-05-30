@@ -3,7 +3,7 @@
  * handlers report progress when there's no MCP client to receive it"
  * problem (Gemini Auditor finding #7 from Draft 1 → Draft 2).
  *
- * The bridge's v0.2.0 tool handlers all call
+ * The bridge's tool handlers all call
  *   `await sendProgress(extra, current, total, message)`
  * which internally calls `extra.sendNotification(...)` with a
  * `notifications/progress` payload. In synchronous (direct) mode that
@@ -20,7 +20,7 @@
 import type { JobRegistry } from './registry.js';
 
 /**
- * Minimal structural subset of MCP SDK's RequestHandlerExtra that all v0.2.0
+ * Minimal structural subset of MCP SDK's RequestHandlerExtra that all
  * tool handlers use. Matching `ToolExtra` in `src/mcp/server.ts`.
  */
 export interface ProgressCaptureExtra {

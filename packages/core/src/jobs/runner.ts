@@ -1,7 +1,7 @@
 /**
  * JobRunner — schedules and executes enqueued jobs.
  *
- * Concurrency: bounded by `p-queue`. Default = 1 because Ollama serializes
+ * Concurrency: bounded by `p-queue`. Default = 1 because oMLX serializes
  * on a single Metal context anyway; concurrency > 1 just adds queueing
  * overhead. Configurable via `OMCP_JOB_CONCURRENCY`.
  *
@@ -37,7 +37,7 @@ export type ToolInvoker = (
 ) => Promise<ToolResult>;
 
 export interface JobRunnerOptions {
-  /** Default 1 — Ollama serializes on Metal so >1 mostly adds queueing. */
+  /** Default 1 — oMLX serializes on Metal so >1 mostly adds queueing. */
   concurrency?: number;
 }
 
@@ -89,7 +89,7 @@ export class JobRunner {
       // flagged the prior shallow spread `{ ...job.args, thinking: ... }`
       // as race-prone when runner concurrency > 1 or when the same job is
       // re-read from disk; the deep clone shifts the immutability contract
-      // from "trust the handler" to "enforce at the boundary". v0.6.0+.
+      // from "trust the handler" to "enforce at the boundary".
       const baseArgs: Record<string, unknown> = structuredClone(job.args);
       const argsForInvoke: Record<string, unknown> =
         job.thinking_resolved !== undefined

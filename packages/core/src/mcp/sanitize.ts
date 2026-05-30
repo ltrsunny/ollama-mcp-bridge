@@ -1,9 +1,9 @@
 /**
- * sanitizeSchemaForStrictMode — strip JSON Schema constraints that crash the
- * llama.cpp GBNF grammar compiler used by Ollama's `format:` feature.
+ * sanitizeSchemaForStrictMode — strip JSON Schema constraints rejected by
+ * oMLX json_schema strict mode.
  *
- * Known-crash causes (Run C, eval-adversarial.mjs):
- *   - `pattern` on string fields → GBNF regex compilation error
+ * Known-rejected constraints (Run C, eval-adversarial.mjs):
+ *   - `pattern` on string fields → strict-mode schema rejection
  *   - `format: "email"` → same
  *   - `format: "uri"` → same
  *
@@ -11,7 +11,7 @@
  *   - `format: "date-time"` — assume risky until tested
  *   - `multipleOf` on numbers — untested; strip proactively
  *
- * Hard reject (cannot resolve, out-of-scope for v0.1.1):
+ * Hard reject (cannot resolve):
  *   - `$ref` anywhere in the schema → returns { ok: false, reason: 'ref-detected' }
  *
  * Callers receive a `stripped` list of JSON Pointer paths to each removed
@@ -33,8 +33,8 @@ export type SanitizeResult =
   | { ok: false; reason: 'ref-detected'; path: string };
 
 /**
- * Walk a JSON Schema object and strip constraints known or assumed to crash
- * the Ollama GBNF compiler. Mutates a deep clone; does not modify the input.
+ * Walk a JSON Schema object and strip constraints known or assumed to be
+ * rejected by oMLX json_schema strict mode. Mutates a deep clone; does not modify the input.
  *
  * @param schema  The JSON Schema object (e.g. from z.toJSONSchema()).
  * @returns       SanitizeResult — ok=true with sanitized schema and stripped

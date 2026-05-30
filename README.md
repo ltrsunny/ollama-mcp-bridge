@@ -7,7 +7,7 @@
 > Save tokens. Stay private. Run offline-capable grunt work on your own
 > Apple Silicon machine.
 
-**Status: v0.5.0.** Six tools: `summarize`, `summarize-long`,
+**Six tools:** `summarize`, `summarize-long`,
 `summarize-long-chunked`, `classify`, `extract`, `transform`.
 Single backend: `MlxHttpBackend` → [oMLX](https://github.com/jundot/omlx)
 serving Qwen3-4B/8B/14B (MLX 4-bit) on Apple Silicon. KV-cache persistent
@@ -97,7 +97,7 @@ recursively combines chunk summaries until one bucket fits a single REDUCE call.
 > tool is useful in **fast-path mode only** — for documents up to ~12-15 KB
 > Chinese / ~25 KB English. Larger documents force the full chunking path,
 > exceeding 60 s of total wall time and timing out the MCP request even though
-> each individual Ollama call stays under the per-call 50 s budget.
+> each individual local-model call stays under the per-call 50 s budget.
 >
 > The chunked path **is reachable from clients with longer timeouts** (Claude
 > Desktop: 240 s default; custom integrations: configurable). The smoke suite
@@ -192,7 +192,7 @@ source_uri: "https://example.com/article.html"
 | `OMCP_MLX_URL` | `http://127.0.0.1:8000` | oMLX server URL — overridden by `--mlx-url` |
 | `OMCP_TIER_B_MODEL` | `Qwen3-4B-Instruct-2507-4bit` | Tier B model name (must exist under `~/.omlx/models/`) |
 | `OMCP_TIER_C_MODEL` | `Qwen3-8B-4bit` | Tier C model name |
-| `OMCP_TIER_D_MODEL` | `Qwen3-14B-4bit` | Tier D model name (demoted in v0.6.0 — see CLAUDE.md, power-user opt-in only) |
+| `OMCP_TIER_D_MODEL` | `Qwen3-14B-4bit` | Tier D model name (power-user opt-in only — see CLAUDE.md) |
 
 ---
 
@@ -262,7 +262,7 @@ brew services start jundot/omlx/omlx
 # Install dependencies + build
 npm install
 
-# Download MLX weights — B + C (Tier D demoted in v0.6.0; pass
+# Download MLX weights — B + C (Tier D is power-user opt-in; pass
 # `--tiers B,C,D` only on 24+ GB Mac with raised hot_cache_max_size)
 cd packages/core && npm run download-models
 

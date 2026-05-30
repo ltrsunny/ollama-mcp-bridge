@@ -2,7 +2,7 @@
   "name": "local-mcp-toolbelt-workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "Monorepo: local-mcp-toolbelt, a local-first MCP toolbelt for delegating inference tasks to in-process llama.cpp models.",
+  "description": "Monorepo: local-mcp-toolbelt, a local-first MCP toolbelt for delegating inference tasks to a local model server.",
   "license": "Apache-2.0",
   "workspaces": [
     "packages/*"

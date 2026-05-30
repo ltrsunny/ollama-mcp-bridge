@@ -1,21 +1,18 @@
 /**
  * MlxHttpBackend — `LlmBackend` implementation that delegates inference to a
- * local MLX FastAPI bridge server over HTTP.
+ * local oMLX inference server over HTTP.
  *
- * The bridge server (`scripts/mlx-bridge-server.py`) exposes an
- * OpenAI-compatible `/v1/chat/completions` endpoint backed by `mlx-lm`.
- * Running the weights on Apple Silicon via MLX delivers 30-50 % better
- * decode throughput than llama.cpp/GGUF for 14B+ models — see
- * `docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md` §D3 for the
- * benchmark data and integration rationale.
+ * oMLX exposes an OpenAI-compatible `/v1/chat/completions` endpoint backed
+ * by MLX weights running on Apple Silicon. See
+ * `docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md` §D3 for benchmark
+ * data and integration rationale.
  *
- * Lifecycle: the bridge server is managed independently of the Node MCP
- * host. Users start it before launching the bridge:
- *   python scripts/mlx-bridge-server.py --model mlx-community/Qwen3-14B-4bit
+ * Lifecycle: oMLX is managed independently of the Node MCP host. Start it
+ * before launching the bridge:
+ *   brew services start jundot/omlx/omlx
  *
- * Concurrency: each `chat()` call is a separate HTTP request; the server
- * serializes them (mlx-lm runs one generation at a time). This mirrors
- * the behaviour of the in-process llama.cpp backend.
+ * Concurrency: each `chat()` call is a separate HTTP request; oMLX
+ * serializes them (one generation at a time on Metal).
  *
  * Token counting: approximate — the exact tokenizer is not exposed over
  * HTTP. Returns `Math.ceil(text.length / 3.5)` (±15 % vs exact). The
@@ -23,10 +20,8 @@
  *
  * Grammar-constrained output: when `opts.format` (JSON Schema) is set,
  * the backend sends `response_format: { type: "json_schema", strict: true }`.
- * oMLX enforces the schema at decode time (verified 2026-05-07: enum
- * constraints binding, required fields produced) — equivalent to llama.cpp's
- * GBNF grammar. This is what makes oMLX viable as the unified backend for
- * classify and extract tools.
+ * oMLX enforces the schema at decode time (enum constraints binding, required
+ * fields produced), making it the unified backend for classify and extract tools.
  *
  * See: docs/scope-memos/v0.5.0-tier-d-eval-2026-05-06.md
  */
@@ -48,8 +43,7 @@ export interface MlxHttpBackendOptions {
   /**
    * Model name to pass in the `model` field of each OpenAI request.
    *
-   * - Required by oMLX and other multi-model servers (model routing by name).
-   * - Legacy mlx-bridge-server.py ignored this field (model fixed at startup).
+   * - Required by oMLX for model routing by name.
    * - When omitted, auto-detected on first request via `GET /v1/models`
    *   and cached for the backend lifetime.
    */
@@ -97,8 +91,7 @@ interface OpenAIChatResponse {
 /**
  * Normalize a JSON Schema for OpenAI Structured Outputs strict mode.
  *
- * Strict mode (verified 2026-05-07 against oMLX) requires every object node
- * to satisfy:
+ * oMLX strict mode requires every object node to satisfy:
  *   1. `additionalProperties: false`
  *   2. `required` lists every key in `properties`
  *
@@ -315,18 +308,18 @@ export class MlxHttpBackend implements LlmBackend {
     // disable the `<think>...</think>` reasoning trace; non-thinking models
     // (Qwen3-4B-Instruct-2507, Mistral, Phi-4) treat it as inert text.
     //
-    // Resolution order (v0.6.0+):
+    // Resolution order:
     //   1. Explicit per-call `opts.disableThinking` (computed by server.ts
     //      via `src/config/thinking-defaults.ts` resolver) — authoritative
     //      when present.
-    //   2. Legacy env-var fallback `OMCP_THINKING_MODE=on` — used when the
+    //   2. Env-var fallback `OMCP_THINKING_MODE=on` — used when the
     //      caller doesn't compute via resolver (e.g. tests, eval harness).
-    //   3. Otherwise: suppress (append `/no_think`) — historical default.
+    //   3. Otherwise: suppress (append `/no_think`) — safe default.
     //
-    // Why disable-by-default historically: oMLX puts the trace in a separate
+    // Why suppress-by-default: oMLX puts the trace in a separate
     // `reasoning_content` field that doesn't burn our MAX_OUTPUT_TOKENS cap,
     // but it adds 30-80 s wall-clock — risks Claude Code's 60 s MCP wall on
-    // longer tasks. The v0.6.0 async-job pattern makes long-decode reachable.
+    // longer tasks.
     let thinkingOn: boolean;
     if (opts.disableThinking !== undefined) {
       thinkingOn = !opts.disableThinking;
@@ -348,9 +341,8 @@ export class MlxHttpBackend implements LlmBackend {
       // When a JSON Schema is provided, use OpenAI Structured Outputs strict
       // mode. Strict mode requires `additionalProperties: false` and `required:
       // <all properties>` on every object node — `normalizeForStrictMode`
-      // injects these so callers can pass plain JSON Schema. oMLX (verified
-      // 2026-05-07) enforces the constraint at decode time, replacing
-      // llama.cpp's GBNF grammar enforcement.
+      // injects these so callers can pass plain JSON Schema. oMLX enforces
+      // the constraint at decode time via json_schema strict mode.
       ...(opts.format !== undefined
         ? {
             response_format: {

@@ -9,7 +9,7 @@
  *     busy-loop doesn't queue ten copies of the same work (§12 #9).
  *   - On startup, mark previously-running orphans as failed.
  *
- * Does NOT execute jobs — that's the runner's job (next commit).
+ * Does NOT execute jobs — that's the runner's job (see jobs/runner.ts).
  *
  * Event channel: a single 'update' event per status change. Consumers use
  * `onUpdate(job_id, listener)` to subscribe to a specific job; the wrapper
