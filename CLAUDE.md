@@ -9,12 +9,9 @@ Highest priority context. Keep under 200 lines.
 Desktop, Cursor, Cline, OpenClaw, Zed, …) delegate lightweight tasks to a local
 oMLX inference server to save frontier tokens, stay private, and run offline.
 
-Monorepo: `packages/core/` is the publishable package. **v0.6.0 shipped
-2026-05-18 + published to npm registry 2026-05-26** as
-`local-mcp-toolbelt@0.6.0` (npmjs.com/package/local-mcp-toolbelt).
-Users install via `npm i -g local-mcp-toolbelt` (bin: `local-mcp`).
-v0.5.0 had renamed from ollama-mcp-bridge + removed Ollama+llama.cpp
-backends; v0.6.0 added async-job triad + per-tool thinking mode.
+Monorepo: `packages/core/` is the publishable package, shipped to npm as
+`local-mcp-toolbelt`. Install: `npm i -g local-mcp-toolbelt` (bin: `local-mcp`).
+Version + change history → `CHANGELOG.md` / `package.json`.
 
 ## Tools currently exposed (7)
 
@@ -31,15 +28,15 @@ backends; v0.6.0 added async-job triad + per-tool thinking mode.
 All tools accept `source_uri` (file:// or http(s)://) — preferred over
 inline `text` because raw bytes never enter the frontier context.
 
-## Tier system (v0.6.0: all oMLX)
+## Tier system (all oMLX)
 
 | Tier | Model | numCtx | Status |
 |---|---|---|---|
 | B | Qwen3-4B-Instruct-2507-4bit | 8192 | ✅ default — short tasks |
 | C | Qwen3-8B-4bit | 32768 | ✅ long-form summarize |
 
-Tier D (`Qwen3-14B-4bit`) **demoted v0.6.0** — 4-bit 14B (~7-8 GB) +
-6 GB hot_cache → OOM-prone on 16 GB Mac. Power-user opt-in via
+Tier D (`Qwen3-14B-4bit`) is **opt-in only** — 4-bit 14B (~7-8 GB) +
+6 GB hot_cache → OOM-prone on 16 GB Mac. Enable via
 `toolTierMap` + `npm run download-models -- --tiers B,C,D`.
 
 Single backend = `MlxHttpBackend` against `http://127.0.0.1:8000` (oMLX).
@@ -51,7 +48,7 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
 (unified-mem mapped, use wall-time). See
 `docs/notes/v0.6.0-60s-wall-brainstorm-2026-05-11.md`.
 
-## Per-tool output caps (v0.6.0)
+## Per-tool output caps
 
 `MAX_OUTPUT_TOKENS` in `src/mcp/server.ts` (mirrored in
 `tests/eval/lib/invoke.mjs`) — semantic ceilings, not tier-driven:
@@ -97,7 +94,7 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
 
 ## Testing layout
 
-- `npm test` (in `packages/core/`) → 207 unit tests via vitest. Pure in-process,
+- `npm test` (in `packages/core/`) → unit tests via vitest. Pure in-process,
   no oMLX required (all backend calls go through a `RecorderBackend` test
   double via `_installTestBackend`). Runs in CI.
 - `node tests/probe-numctx.mjs` and `tests/diag-long-input.mjs` are diagnostic
@@ -115,29 +112,25 @@ The Auditor is the user. No code lands ahead of an approved scope memo.
 ## Bridge-usage discipline (enforced by hook, not honour-system)
 
 `.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on **Read** that
-*physically blocks* the slop paths (exit 2). (Bash command-scanning was
-removed 2026-05-29 per **S5** — regex-parsing shell strings was
-structurally unsound + false-block-prone; enforcement is Read-only.
-Threat model = self-discipline, see
-`.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md`.) Plugin packaging path
-(`.claude-plugin/` + `.mcp.json` + `hooks/hooks.json` at repo root)
-PoC committed 2026-05-25 (3e0d18b + 02760c5) but plugin marketplace
-distribution **deferred** — 2026-05-26 adversarial review surfaced
-structural blocker (plugin meta at repo root, `dist/` gitignored at
-`packages/core/`, no single plugin source type pulls both). Until
-F2 (move plugin meta into `packages/core/`) is tested or Anthropic
-documents npm-source plugin layout, distribution is npm-only:
-`npm i -g local-mcp-toolbelt` + `claude mcp add -s user
-local-mcp-toolbelt -- npx -p local-mcp-toolbelt local-mcp serve`.
+*physically blocks* large raw reads (exit 2), routing them to the bridge.
+Enforcement is **Read-only** (no Bash command-scanning — string-parsing shell
+commands was unsound + false-block-prone). Threat model = **agent
+self-discipline / token economy, NOT security** (→ low false-positive, tolerate
+false-negative). Detail:
+`.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md`.
 
-Three enforcement bands:
-- **External files > 4 KB** — outside project + `~/.claude` + `~/.omlx`.
-  Route via `source_uri`. (1 KB → 4 KB on 2026-05-28, B2 empirical basis.)
-- **Project-internal analysis paths > 4 KB** — `.claude/brainstorm`,
-  `.claude/diagnostics`, `docs/notes`, `docs/scope-memos`, `docs/prior-art`.
-  Edit-mode marker (all analysis paths): `touch .claude/.bridge-edit-mode` — auto-expires 60min (override via `OMCP_HOOK_MARKER_EXPIRE_SEC`); rm to exit; git-ignored. Renamed 2026-05-22 from `.scope-memo-edit-mode` after Bug B adversarial review.
-- **Project-internal data files > 4 KB** by extension — `*.log`, `*.diff`,
-  `*.jsonl`, `*.ips`, `*.ndjson`, `*.csv`.
+Plugin marketplace distribution is **deferred** (structural blocker — plugin
+meta at repo root vs `dist/` gitignored; npm-only for now). See `two-repo-workflow`
+memory + `.claude/brainstorm/plugin-file-layout-structural-brief-2026-05-26.md`.
+
+Three Read enforcement bands (threshold 4 KB):
+- **External files** — outside project + `~/.claude` + `~/.omlx`. Route via `source_uri`.
+- **Project analysis paths** — `.claude/brainstorm`, `.claude/diagnostics`,
+  `docs/notes`, `docs/scope-memos`, `docs/prior-art`. Edit-mode marker:
+  `touch .claude/.bridge-edit-mode` (auto-expires 60 min, override
+  `OMCP_HOOK_MARKER_EXPIRE_SEC`; `rm` to exit; git-ignored).
+- **Project-internal data files** by extension — `*.log`, `*.diff`, `*.jsonl`,
+  `*.ips`, `*.ndjson`, `*.csv`.
 
 Source code / configs / small notes inside the project stay allow-listed —
 surgical edits still need raw bytes. Long *understanding* (no edit): use
