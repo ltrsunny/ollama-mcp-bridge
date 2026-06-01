@@ -231,15 +231,27 @@ file_size() {
   stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo 0
 }
 
-bigger_than() {
-  local p="$1" threshold="$2" size
-  [ -f "$p" ] || return 1
-  size="$(file_size "$p")"
-  [ "$size" -gt "$threshold" ]
+# Shared guidance block for both block messages (bridge tool suffixes + the
+# install-mode namespace note). Single source so the two callers can't drift —
+# they had (slightly different ToolSearch wording).
+emit_bridge_tool_hint() {
+  local p="$1"
+  cat >&2 <<EOF
+  *__summarize-long   source_uri="file://$p"
+  *__extract          source_uri="file://$p"  schema={...}
+  *__classify         text="..."  categories=[...]
+
+The namespace prefix varies by install mode. Use ToolSearch to find the
+current one — query "select:*local-mcp-toolbelt*__extract" or keyword
+"local-mcp-toolbelt". Known prefixes:
+  legacy:  mcp__local-mcp-toolbelt__*
+  plugin:  mcp__plugin_local-mcp-toolbelt_local-mcp-toolbelt__*
+EOF
 }
 
+# size is passed in (stat'd once in check_path) — was re-stat'd here on a block.
 emit_external_block() {
-  local p="$1" size; size="$(file_size "$p")"
+  local p="$1" size="$2"
   cat >&2 <<EOF
 [bridge enforcement — external file]
 File: $p ($size bytes)
@@ -249,17 +261,11 @@ Direct read brings raw bytes into your context — defeats the bridge.
 Route through the local-mcp-toolbelt bridge instead. Tool suffixes
 (prepend with the current MCP namespace — see below):
 
-  *__summarize-long   source_uri="file://$p"
-  *__extract          source_uri="file://$p"  schema={...}
-  *__classify         text="..."  categories=[...]
+EOF
+  emit_bridge_tool_hint "$p"
+  cat >&2 <<EOF
 
 Local Qwen3 on oMLX — no frontier tokens spent on prefill of this file.
-
-The namespace prefix varies by install mode. Use ToolSearch to find
-the current one — e.g. query "select:*local-mcp-toolbelt*__extract"
-or keyword "local-mcp-toolbelt". Known prefixes:
-  legacy:  mcp__local-mcp-toolbelt__*
-  plugin:  mcp__plugin_local-mcp-toolbelt_local-mcp-toolbelt__*
 
 If you genuinely need raw bytes (precise edit, code surgery): the file
 must be inside the project tree OR <= ${EXTERNAL_THRESHOLD} bytes.
@@ -267,7 +273,7 @@ EOF
 }
 
 emit_analysis_block() {
-  local p="$1" reason="$2" size; size="$(file_size "$p")"
+  local p="$1" reason="$2" size="$3"
   cat >&2 <<EOF
 [bridge enforcement — project analysis path]
 File: $p ($size bytes)
@@ -278,15 +284,9 @@ burns the same tokens whether the file lives inside or outside the
 project. Use the bridge — tool suffixes (prepend with the current MCP
 namespace — see below):
 
-  *__summarize-long   source_uri="file://$p"
-  *__extract          source_uri="file://$p"  schema={...}
-  *__classify         text="..."  categories=[...]
-
-The namespace prefix varies by install mode. Use ToolSearch to find
-the current one — query "select:*local-mcp-toolbelt*__extract" or
-keyword "local-mcp-toolbelt". Known prefixes:
-  legacy:  mcp__local-mcp-toolbelt__*
-  plugin:  mcp__plugin_local-mcp-toolbelt_local-mcp-toolbelt__*
+EOF
+  emit_bridge_tool_hint "$p"
+  cat >&2 <<EOF
 
 Source code, configs, and small notes inside the project stay
 allow-listed — only analysis-path / data-file content is enforced
@@ -315,19 +315,24 @@ check_path() {
   if is_agent_task_output "$p"; then
     return 0
   fi
+  # Stat ONCE here (was re-stat'd inside each emit_* on a block) and reuse the
+  # size for both the threshold test and the message. Missing file → size 0.
+  # `if [ -f ]` (not `[ -f ] && …`) so a missing file doesn't trip `set -e`.
+  local size=0
+  if [ -f "$p" ]; then size="$(file_size "$p")"; fi
   if ! is_allowed_path "$p"; then
-    if bigger_than "$p" "$EXTERNAL_THRESHOLD"; then
-      emit_external_block "$p"
+    if [ "$size" -gt "$EXTERNAL_THRESHOLD" ]; then
+      emit_external_block "$p" "$size"
       exit 2
     fi
     return 0
   fi
-  if is_analysis_path "$p" && bigger_than "$p" "$ANALYSIS_THRESHOLD"; then
-    emit_analysis_block "$p" "matches analysis-path pattern"
+  if is_analysis_path "$p" && [ "$size" -gt "$ANALYSIS_THRESHOLD" ]; then
+    emit_analysis_block "$p" "matches analysis-path pattern" "$size"
     exit 2
   fi
-  if is_data_file "$p" && bigger_than "$p" "$ANALYSIS_THRESHOLD"; then
-    emit_analysis_block "$p" "matches data-file extension"
+  if is_data_file "$p" && [ "$size" -gt "$ANALYSIS_THRESHOLD" ]; then
+    emit_analysis_block "$p" "matches data-file extension" "$size"
     exit 2
   fi
   return 0
