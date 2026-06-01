@@ -58,14 +58,14 @@
 #      Threshold: same as band 2.
 #
 # Agent task-output exemption: paths matching the agent's own task-scratch
-# pattern (default `/claude-<uid>/<...>/tasks/<...>.output`) are exempt
-# from all bands. These are working scratch I/O for the running session,
-# not "external content to avoid" — blocking them forces the agent to
-# bridge-extract its own outputs (lossy 4B paraphrase). Pattern uses
-# path shape, not a hard-coded `/private/tmp` prefix, so the exemption
-# works under macOS (/private/tmp), Linux/Docker (/tmp), and any other
-# scratch root. Override or disable via OMCP_HOOK_TASK_OUTPUT_RE (empty
-# string disables the exemption entirely).
+# pattern are exempt from all bands. These are working scratch I/O for the
+# running session, not "external content to avoid" — blocking them forces
+# the agent to bridge-extract its own outputs (lossy 4B paraphrase). The
+# pattern is ANCHORED to the macOS scratch root (`/private/tmp/claude-…` or
+# `/tmp/claude-…`): an earlier front-unanchored pattern exempted ANY path
+# whose suffix merely matched `…/tasks/*.output` anywhere on disk (a bypass).
+# macOS-focused — Linux/Docker are not a current target. Override or disable
+# via OMCP_HOOK_TASK_OUTPUT_RE (empty string disables the exemption entirely).
 #
 # Source code and config inside the project (not matching bands 2 or 3)
 # stay allow-listed — surgical edits still need raw bytes.
@@ -98,11 +98,13 @@ DATA_EXTS_RAW="${OMCP_HOOK_DATA_EXTENSIONS:-$DEFAULT_DATA_EXTS}"
 EXTRA_ALLOWED_RAW="${OMCP_HOOK_EXTRA_ALLOWED_PREFIXES:-}"
 
 # Agent task-output scratch (background-task `.output` files). Exempted from
-# all bands. Pattern matches the standard layout: anything ending with
-# `/claude-<uid>/<encoded-cwd>/<session-uuid>/tasks/<task-id>.output`
-# (works for macOS /private/tmp + Linux /tmp + Docker — no hard-coded
-# root). Disable with OMCP_HOOK_TASK_OUTPUT_RE="".
-DEFAULT_TASK_OUTPUT_RE='/claude-[0-9]+/[^/]+/[^/]+/tasks/[^/]+\.output$'
+# all bands. ANCHORED to the macOS scratch root, flexible on uid name + depth:
+#   ^(/private)?/tmp/claude-<uid>/<…one or more segments…>/tasks/<id>.output
+# The leading anchor closes a bypass (the old front-unanchored pattern matched
+# any suffix-shaped path anywhere on disk); `claude-[^/]+` allows non-numeric
+# roots (e.g. claude-mcp-browser-bridge-…); `(/[^/]+)+` lets the layout deepen.
+# Disable with OMCP_HOOK_TASK_OUTPUT_RE="".
+DEFAULT_TASK_OUTPUT_RE='^(/private)?/tmp/claude-[^/]+(/[^/]+)+/tasks/[^/]+\.output$'
 TASK_OUTPUT_RE="${OMCP_HOOK_TASK_OUTPUT_RE-$DEFAULT_TASK_OUTPUT_RE}"
 
 # Without a project root we can't tell internal vs external. Under-enforce

@@ -33,22 +33,36 @@ assert_exit() {
 }
 
 # ----------- A4: agent task-output exemption ------------------------------
+# Synthetic, hermetic fixtures (no machine-dependent SKIP, no tautology): both
+# files are >4KB so the assertions genuinely exercise the exemption — a <4KB
+# file would pass via the small-external allow-path regardless of whether A4
+# fired. Sizes are verified so a failed write FAILs loudly, not passes blank.
 echo "[A4 -- agent task-output exemption]"
 
-TASK_OUT="$(ls /private/tmp/claude-*/-Users-*-ollama-claude/*/tasks/*.output 2>/dev/null | awk 'NR==1')"
-if [ -z "$TASK_OUT" ] || [ ! -f "$TASK_OUT" ]; then
-    printf '  SKIP  A4 tests -- no task-output fixture present on this machine\n'
-else
+A4_DIR="$(mktemp -d /tmp/claude-enforcetest-XXXXXX)"
+A4_TASK="$A4_DIR/-Users-x-proj/sess-uuid/tasks/job1.output"
+A4_CTRL_DIR="$(mktemp -d /tmp/notclaude-enforcetest-XXXXXX)"
+A4_CTRL="$A4_CTRL_DIR/a/b/tasks/job1.output"
+mkdir -p "$(dirname "$A4_TASK")" "$(dirname "$A4_CTRL")" 2>/dev/null
+yes "task output payload line." | head -c 6000 > "$A4_TASK" 2>/dev/null
+yes "task output payload line." | head -c 6000 > "$A4_CTRL" 2>/dev/null
+if [ -s "$A4_TASK" ] && [ -s "$A4_CTRL" ] && [ "$(wc -c < "$A4_TASK" | tr -d '[:space:]')" -gt 4096 ]; then
+    # Exempt: >4KB file under a scratch-shaped path anchored at /tmp/claude-.
     bash "$HOOK" 2>/dev/null <<JSONEOF
-{"tool_name":"Read","tool_input":{"file_path":"$TASK_OUT"}}
+{"tool_name":"Read","tool_input":{"file_path":"$A4_TASK"}}
 JSONEOF
-    assert_exit "A4.1 Read task-output exits 0 (A4 exempts)" 0 "$?"
+    assert_exit "A4.1 >4KB task-output under /tmp/claude- is EXEMPTED (exits 0 despite >threshold)" 0 "$?"
 
-    bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
+    # Control: same size + `…/tasks/*.output` suffix but a NON-scratch root —
+    # the shape the OLD front-unanchored pattern wrongly exempted (the bypass).
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$A4_CTRL"}}
 JSONEOF
-    assert_exit "A4.2 Read external still exits 2 (reverse)" 2 "$?"
+    assert_exit "A4.2 >4KB task-suffix at NON-scratch root is BLOCKED (anchor closes the bypass)" 2 "$?"
+else
+    FAIL=$((FAIL+1)); printf '  FAIL  A4 setup -- fixtures not created >4KB\n'
 fi
+rm -rf "$A4_DIR" "$A4_CTRL_DIR"
 
 # ----------- S5: Bash command scanning removed ----------------------------
 # Replaces the former B1 first-word-allowlist tests. S5 (2026-05-29) dropped
@@ -92,10 +106,13 @@ else
     FAIL=$((FAIL+1)); printf '  FAIL  B3.1 block message lacks ToolSearch\n'
 fi
 
-if printf '%s' "$OUT" | grep -qE '\*__extract|\*__summarize-long'; then
-    PASS=$((PASS+1)); printf '  PASS  B3.2 block message uses suffix-only tool syntax\n'
+# Tightened: match a GUIDANCE line (tool-suffix followed by an arg assignment),
+# not the bare substring `*__extract`, which also appears in the unrelated
+# ToolSearch example line (`select:*…__extract`) and made this a weak assertion.
+if printf '%s' "$OUT" | grep -qE '\*__(summarize-long|extract|classify)[[:space:]]+(source_uri|text)='; then
+    PASS=$((PASS+1)); printf '  PASS  B3.2 block message shows suffix tool syntax with args\n'
 else
-    FAIL=$((FAIL+1)); printf '  FAIL  B3.2 block message lacks suffix-only syntax\n'
+    FAIL=$((FAIL+1)); printf '  FAIL  B3.2 block message lacks suffix tool-with-args syntax\n'
 fi
 
 if printf '%s' "$OUT" | grep -q 'plugin_local-mcp-toolbelt'; then
@@ -112,30 +129,39 @@ echo "[B2 -- empirical threshold raise]"
 # point makes 1KB a poor trade (high latency, low savings) and 4KB+ a clear
 # win. New default external threshold is 4096 bytes (was 1024).
 
-# Setup: 2KB fixture, above the old 1024 threshold and below the new 4096.
-mkdir -p /tmp/b2-test 2>/dev/null
-B2_FIXTURE=/tmp/b2-test/2kb.txt
-if [ ! -f "$B2_FIXTURE" ] || [ "$(stat -f%z "$B2_FIXTURE" 2>/dev/null || stat -c%s "$B2_FIXTURE" 2>/dev/null)" != "2048" ]; then
-    yes "the quick brown fox jumps over the lazy dog. " | tr -d '\n' | head -c 2048 > "$B2_FIXTURE"
+# Hermetic per-run fixtures (cleaned on exit); sizes verified portably with
+# `wc -c` (not BSD-only `stat -f%z`), so a failed write surfaces as a loud FAIL
+# rather than a fixture-missing/0-byte pass that never exercised the threshold.
+B2_DIR="$(mktemp -d /tmp/b2-enforcetest-XXXXXX)"
+B2_SMALL="$B2_DIR/2kb.txt"   # under 4KB
+B2_BIG="$B2_DIR/8kb.txt"     # over 4KB
+yes "the quick brown fox jumps over the lazy dog. " | tr -d '\n' | head -c 2048 > "$B2_SMALL" 2>/dev/null
+yes "the quick brown fox jumps over the lazy dog. " | tr -d '\n' | head -c 8192 > "$B2_BIG" 2>/dev/null
+B2_SMALL_SZ="$(wc -c < "$B2_SMALL" 2>/dev/null | tr -d '[:space:]')"
+B2_BIG_SZ="$(wc -c < "$B2_BIG" 2>/dev/null | tr -d '[:space:]')"
+if [ "${B2_SMALL_SZ:-0}" != "2048" ] || [ "${B2_BIG_SZ:-0}" != "8192" ]; then
+    FAIL=$((FAIL+1))
+    printf '  FAIL  B2 setup -- fixtures wrong size (small=%s want 2048, big=%s want 8192)\n' "${B2_SMALL_SZ:-0}" "${B2_BIG_SZ:-0}"
+else
+    # Positive: 2KB external is UNDER the 4KB threshold -> allowed.
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$B2_SMALL"}}
+JSONEOF
+    assert_exit "B2.1 Read 2KB external (under 4KB threshold) exits 0" 0 "$?"
+
+    # Reverse: 8KB external is OVER the new threshold -> blocked.
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$B2_BIG"}}
+JSONEOF
+    assert_exit "B2.2 Read 8KB external (over 4KB threshold) exits 2 (still blocks)" 2 "$?"
+
+    # Reverse: restore old 1024 threshold via env -> 2KB blocks again (pre-B2).
+    OMCP_HOOK_THRESHOLD_BYTES=1024 bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$B2_SMALL"}}
+JSONEOF
+    assert_exit "B2.3 2KB external with old 1024 threshold exits 2 (pre-B2 reproduced)" 2 "$?"
 fi
-
-# Positive: 2KB external file is now UNDER the 4KB threshold -> allowed.
-bash "$HOOK" 2>/dev/null <<JSONEOF
-{"tool_name":"Read","tool_input":{"file_path":"$B2_FIXTURE"}}
-JSONEOF
-assert_exit "B2.1 Read 2KB external (now under 4KB threshold) exits 0" 0 "$?"
-
-# Reverse: 23KB external (~/.claude.json) is well OVER the new threshold -> blocked.
-bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
-JSONEOF
-assert_exit "B2.2 Read 23KB external (over 4KB threshold) exits 2 (still blocks)" 2 "$?"
-
-# Reverse: restore old 1024 threshold via env -> 2KB blocks again (pre-B2).
-OMCP_HOOK_THRESHOLD_BYTES=1024 bash "$HOOK" 2>/dev/null <<JSONEOF
-{"tool_name":"Read","tool_input":{"file_path":"$B2_FIXTURE"}}
-JSONEOF
-assert_exit "B2.3 2KB external with old 1024 threshold exits 2 (pre-B2 reproduced)" 2 "$?"
+rm -rf "$B2_DIR"
 
 # ----------- T7: marker bootstrap caveat in analysis block ---------------
 echo "[T7 -- marker bootstrap caveat]"
