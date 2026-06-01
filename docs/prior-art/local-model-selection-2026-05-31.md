@@ -1,6 +1,16 @@
-# Prior Art Review (DRAFT) — local model selection for the bridge
+# Prior Art Review — local model selection for the bridge
 
-**Status: DRAFT — thin coverage, not a decision.**
+**Status: FINAL (2026-05-31) — verdict KEEP Qwen3 as the shipped default (both slots).**
+The empirical local eval ("OPEN②", end of doc) is the *confirmation* step, not a gate:
+the verdict stands on engine-guaranteed JSON validity (model-independent) + Qwen's
+structural CJK token-efficiency + three independent adversarial passes finding no
+better *permissive* candidate. Sections below are in CHRONOLOGICAL order of the
+adversarial process (initial DRAFT → verification → triangulation → candidate-
+broadening → clean-ghm close); the first section's "DRAFT" framing is preserved as
+historical record (anti-retcon, #22). **Read the last two sections for the decision.**
+
+---
+_(historical — provenance of the initial pass:)_ **Status was: DRAFT — thin coverage, not a decision.**
 Source: deep-research workflow run `wf_19a8f6b5-399`, which fetched 25 claims
 from authoritative sources (Hugging Face model cards, arXiv). ⚠️ The workflow's
 adversarial-verify layer FAILED (every verify agent was cap-throttled → 0-0
@@ -173,6 +183,86 @@ methodology.
 
 Net: the all-Qwen lineup is justified; effort is better spent verifying the ENGINE
 (oMLX strict decode) than swapping models.
+
+## Candidate broadening — adversarial brainstorm (2026-05-31)
+
+4-voice fanout (agy_pro / copilot_pro / ghm / nv_pro). **3/4 effective** (threshold met):
+agy_pro ✓ (honest, `[unverified]`-marked, sharp critique); nv_pro ✓ (candidates +
+premise-challenge); copilot_pro ✓ **IMPROVED** — this run NO fabricated citations,
+all `[unverified]` (the sister's `cad382e` anti-fabrication instruction worked on
+gpt-4.1 too). ghm ✗ dud (catalog 429 → a weak model hallucinating nonsense names:
+"Gemini-Small" / "Dolly-v1" / "Jurassic-Agnetha"; truncated).
+
+**Broadened candidate LEADS** (all `[unverified]` — for a future local eval, NOT confirmed):
+- *Permissive (default-eligible):* **Yi-1.5-6B-Chat (Apache-2.0)** — bilingual EN/CN,
+  CJK-tuned → the standout PERMISSIVE CJK challenger (could rival Qwen on CJK while
+  staying Apache; copilot's "most credible alternative"). Also Mistral-7B-Instruct-v0.3
+  (Apache, efficient, weaker CJK), Phi-3.5/Phi-4-mini (MIT, small, weak CJK),
+  InternLM2.5-7B-Chat / MiniCPM / OpenHermes-2.5-Mistral (verify license + MLX).
+- *Restricted (opt-in):* **Llama-3.1-8B-Instruct (Llama license)** — strong English
+  extraction, "dry"/less-preamble (good for engine-grammar JSON), huge ecosystem;
+  weak CJK → the English/schema-stability challenger (most-cited). Also Gemma-2-2b/9b-it
+  (Gemma terms), DeepSeek-R1-Distill-Llama-8B (reasoning-distilled → better complex
+  content-selection), Baichuan2-7B (CJK).
+
+**Adversarial leads (unverified):** since JSON-validity is engine-guaranteed, the real
+axes are content-selection / extraction-accuracy + CJK quality + preamble-dryness.
+Qwen weaknesses *alleged* (verify, not confirmed): chattiness/preamble fights the
+grammar; over-confident entity-hallucination at 4-bit; cross-lingual bleed (CJK →
+Chinese idioms). Top challengers to eval: **Yi-1.5-6B (permissive CJK)** + **Llama-3.1-8B
+(English/dry)**.
+
+**Premise-check (good catch, wrong):** nv_pro claimed "Qwen3 doesn't exist; SOTA is
+Qwen2.5; 'Qwen3-4B-Instruct-2507' is hallucinated." REFUTED by our own running system
+(the bridge runs `Qwen3-4B-Instruct-2507-4bit` — tiers.ts + downloaded + 207 tests).
+nv_pro's training is stale (pre-Qwen3); ironically its answering model was a Qwen.
+The premise holds — but the adversarial prompt correctly forced the verification (#21).
+
+**Verdict: UNCHANGED — KEEP Qwen3 default.** No lead is confirmed better (all
+`[unverified]`); Qwen's CJK + proven in-product still lead, and JSON-validity is
+engine-solved. But the future local-eval shortlist is now RICHER: prioritize
+**Yi-1.5-6B (Apache, CJK)** + **Llama-3.1-8B (English)** + Phi-3.5/4-mini alongside
+Qwen3, on real extract/summarize (incl CJK) at 4-bit.
+
+## Clean ghm re-run (2026-05-31) — OPEN① closed
+
+Re-ran candidate-broadening with the sister's FIXED ghm (`47832d0`) — the voice
+that was the ✗ dud last round — to confirm the shortlist before committing to the
+eval. Voices: ghm / nv_pro / agy_pro (3 distinct platforms, #14).
+
+- **ghm fix VALIDATED (consumer-side, stronger evidence than hoped):** ghm hit a
+  catalog HTTP 429 this round and the picker **failed-fast honestly** (`rc=1` after
+  2 attempts) — NO hallucinated model names (vs last round's "Gemini-Small" /
+  "Dolly-v1"), NO `<think>`-leak (grep-clean). So `47832d0` works as designed: under
+  a dead catalog it now DROPS the voice instead of confabulating. ghm contributed no
+  candidates (rate-limited), but that is the correct behavior, not a regression.
+- **nv_pro: shortlist COMPLETE** — "Qwen and Yi are the only viable [CJK] options;
+  Llama and Phi are not suitable for CJK." Zero new candidates.
+- **agy_pro (honest, all `[unverified]`): one genuinely-NEW lead — `GLM-4-9B-Chat`**
+  (Zhipu AI License = RESTRICTED → opt-in only): Chinese-first, "trades blows with or
+  beats Qwen" on CJK nuance + CJK token-efficiency. The other two it raised
+  (Mistral-7B-v0.3 Apache; Gemma-2 restricted) are already listed above.
+
+**OPEN① outcome — DEFAULT-eligible shortlist confirmed complete.** The clean round
+surfaced no new *permissive* candidate (ghm 429'd; agy's new lead is restricted).
+**Verdict UNCHANGED: KEEP Qwen3 default.** Eval shortlist (OPEN②) stands:
+**Yi-1.5-6B** (Apache, CJK — the one to beat) + **Phi-3.5/4-mini** (MIT, small) +
+**Llama-3.1-8B** (restricted, English/dry baseline). **Add `GLM-4-9B-Chat`** as a
+restricted/opt-in CJK challenger to eval *only if* a non-Qwen CJK opt-in tier is ever
+wanted (low priority; 9B is borderline in the 16 GB envelope with KV cache).
+
+*Dogfood note:* this round's 14 KB fanout output was structured via the bridge's own
+`extract` (Qwen3-4B, tier B) — faithful 3-voice attribution, no hallucinated
+candidates, `[unverified]` flags preserved (a positive data point for B-tier
+extraction quality; latency ~61 s on 4.3 K input tokens — near the 60 s wall, worth
+watching, likely oMLX cold-start).
+
+**OPEN② — DEFERRED (Auditor decision, 2026-06-01): ship & observe.** The eval above is
+NOT run now — the KEEP-Qwen verdict stands as the final decision on its existing support
+(engine-guaranteed JSON validity + Qwen CJK token-efficiency + three adversarial passes;
+nv_pro independently: "Qwen and Yi the only viable CJK options, shortlist complete"). Run
+the Yi-1.5-6B-vs-Qwen CJK eval ONLY if real CJK extract/summarize quality issues surface in
+use. **This PA is a CLOSED decision, not pending.**
 
 ## Cross-references
 - Deep-research run: `wf_19a8f6b5-399` (search+fetch OK; verify layer failed).
