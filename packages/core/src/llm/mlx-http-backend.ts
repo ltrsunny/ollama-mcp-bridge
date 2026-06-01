@@ -97,39 +97,67 @@ interface OpenAIChatResponse {
  *
  * Without these, oMLX silently falls back to non-strict mode and the model
  * output is unconstrained — exactly the bug the strict mode was meant to
- * prevent. This helper walks the schema and patches each `type: "object"`
- * node in-place on a deep clone, so the caller's schema is unchanged.
+ * prevent. This helper walks the schema and patches every object node —
+ * including nullable union types (`type: ["object", "null"]`) — in-place on a
+ * deep clone, so the caller's schema is unchanged.
  *
- * Skips: arrays' `items` are recursed into; `$ref` is left alone (oMLX
- * resolves refs); enum / pattern / format are not strict-mode concerns.
+ * Recurses into every applicator position (`properties`, `items`,
+ * `prefixItems`, `anyOf`/`oneOf`/`allOf`, `$defs`, …) so nested AND sibling
+ * subschemas are all tightened; only applicator keywords are walked, so
+ * data-bearing `enum`/`const`/`default` values are never mutated. `$ref` is
+ * left alone (oMLX resolves refs; the extract path rejects `$ref` upstream in
+ * `sanitizeSchemaForStrictMode`); pattern / format are not strict-mode concerns.
  */
-function normalizeForStrictMode(
+export function normalizeForStrictMode(
   schema: Record<string, unknown>,
 ): Record<string, unknown> {
   const cloned = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+
+  // A node is an "object node" if its `type` is "object" OR a union that
+  // includes "object" (e.g. a nullable object: `type: ["object", "null"]`).
+  const isObjectType = (t: unknown): boolean =>
+    t === 'object' || (Array.isArray(t) && t.includes('object'));
+
+  // Applicator keywords that hold sub-schemas. We recurse ONLY into these (an
+  // allow-list) and never into data-bearing keywords (enum/const/default/
+  // examples), so literal values are never mutated.
+  const SUBSCHEMA = ['items', 'additionalProperties', 'propertyNames', 'contains', 'not', 'if', 'then', 'else'];
+  const SUBSCHEMA_ARRAY = ['prefixItems', 'anyOf', 'oneOf', 'allOf'];
+  const SUBSCHEMA_MAP = ['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'];
+
   const visit = (node: unknown): void => {
-    if (node === null || typeof node !== 'object') return;
-    if (Array.isArray(node)) {
-      for (const child of node) visit(child);
-      return;
-    }
+    if (node === null || typeof node !== 'object' || Array.isArray(node)) return;
     const obj = node as Record<string, unknown>;
-    if (obj['type'] === 'object' && obj['properties'] && typeof obj['properties'] === 'object') {
-      const props = obj['properties'] as Record<string, unknown>;
-      const keys = Object.keys(props);
-      // Strict-mode invariants:
+
+    // Tighten object nodes in place. The old `obj['type'] === 'object'` check
+    // silently skipped nullable union types, leaving that subtree unconstrained.
+    if (isObjectType(obj['type']) && obj['properties'] && typeof obj['properties'] === 'object') {
       obj['additionalProperties'] = false;
-      obj['required'] = keys;
-      // Recurse into property schemas.
-      for (const k of keys) visit(props[k]);
-    } else if (obj['type'] === 'array' && obj['items']) {
-      visit(obj['items']);
-    } else {
-      // Non-object/array: no strict-mode obligations, but still walk in case
-      // of `oneOf`/`anyOf`/etc. branches.
-      for (const v of Object.values(obj)) visit(v);
+      obj['required'] = Object.keys(obj['properties'] as Record<string, unknown>);
+    }
+
+    // Recurse into EVERY sub-schema position — independent of this node's type,
+    // not mutually exclusive with the tighten above. The previous
+    // if/else-if/else made the object/array/other branches exclusive, so
+    // sibling combinators (anyOf/oneOf/allOf) and `prefixItems` co-located on an
+    // object or array node were never visited and decoded unconstrained
+    // (code-review E1-E3).
+    for (const key of SUBSCHEMA) {
+      const v = obj[key];
+      if (v && typeof v === 'object' && !Array.isArray(v)) visit(v);
+    }
+    for (const key of SUBSCHEMA_ARRAY) {
+      const arr = obj[key];
+      if (Array.isArray(arr)) for (const child of arr) visit(child);
+    }
+    for (const key of SUBSCHEMA_MAP) {
+      const m = obj[key];
+      if (m && typeof m === 'object' && !Array.isArray(m)) {
+        for (const v of Object.values(m as Record<string, unknown>)) visit(v);
+      }
     }
   };
+
   visit(cloned);
   return cloned;
 }

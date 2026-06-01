@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MlxHttpBackend } from '../../src/llm/mlx-http-backend.js';
+import { MlxHttpBackend, normalizeForStrictMode } from '../../src/llm/mlx-http-backend.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -448,5 +448,80 @@ describe('MlxHttpBackend', () => {
       // no second chat attempt because we never declared "alive again".
       expect(fetchMock).toHaveBeenCalled();
     });
+  });
+});
+
+describe('normalizeForStrictMode — recursion completeness (code-review E1-E3)', () => {
+  type Node = Record<string, unknown>;
+  const prop = (schema: Node, name: string): Node =>
+    (schema['properties'] as Record<string, Node>)[name];
+
+  it('E1: tightens a nullable object node (type: ["object", "null"])', () => {
+    const out = normalizeForStrictMode({
+      type: 'object',
+      properties: {
+        addr: { type: ['object', 'null'], properties: { city: { type: 'string' } } },
+      },
+    });
+    const addr = prop(out, 'addr');
+    expect(addr['additionalProperties']).toBe(false);
+    expect(addr['required']).toEqual(['city']);
+  });
+
+  it('E2: recurses into prefixItems even when items is also present', () => {
+    const out = normalizeForStrictMode({
+      type: 'object',
+      properties: {
+        pair: {
+          type: 'array',
+          items: { type: 'string' },
+          prefixItems: [{ type: 'object', properties: { a: { type: 'string' } } }],
+        },
+      },
+    });
+    const tupleObj = (prop(out, 'pair')['prefixItems'] as Node[])[0];
+    expect(tupleObj['additionalProperties']).toBe(false);
+    expect(tupleObj['required']).toEqual(['a']);
+  });
+
+  it('E3: tightens sibling anyOf branches on an object node (not just its properties)', () => {
+    const out = normalizeForStrictMode({
+      type: 'object',
+      properties: {
+        field: {
+          type: 'object',
+          properties: { known: { type: 'string' } },
+          anyOf: [{ type: 'object', properties: { x: { type: 'string' } } }],
+        },
+      },
+    });
+    const field = prop(out, 'field');
+    expect(field['additionalProperties']).toBe(false);
+    expect(field['required']).toEqual(['known']);
+    const branch = (field['anyOf'] as Node[])[0];
+    expect(branch['additionalProperties']).toBe(false);
+    expect(branch['required']).toEqual(['x']);
+  });
+
+  it('leaves data-bearing keywords (schema-shaped enum values) untouched', () => {
+    const out = normalizeForStrictMode({
+      type: 'object',
+      properties: {
+        shape: { enum: [{ type: 'object', properties: { x: { type: 'string' } } }] },
+      },
+    });
+    // The enum entry is DATA, not a subschema — it must NOT gain
+    // additionalProperties/required (allow-list recursion, never `enum`).
+    expect((prop(out, 'shape')['enum'] as Node[])[0]).toEqual({
+      type: 'object',
+      properties: { x: { type: 'string' } },
+    });
+  });
+
+  it('operates on a clone — caller schema is not mutated', () => {
+    const input: Node = { type: 'object', properties: { a: { type: 'string' } } };
+    const before = JSON.parse(JSON.stringify(input)) as Node;
+    normalizeForStrictMode(input);
+    expect(input).toEqual(before);
   });
 });
