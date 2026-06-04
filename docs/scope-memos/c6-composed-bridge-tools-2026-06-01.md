@@ -170,10 +170,24 @@ design from shipping a fix for <2% of the actual problem.
 doc/log/transcript reading), so the doc-read share is partly inflated — but "git-diff is a
 tiny fraction" is robust regardless.
 
-**New, evidence-based direction (separate decision):** the data points at the **bash-file-read
-gap (the S5 hole)** + **bridging large doc / saved-output reads** — NOT composed tools.
-Pursuing the bash-read gap re-opens the S5 false-positive question and needs its own design
-pass. **Composed tools (C6) = DROPPED, data-refuted.**
+**Follow-up — pursued the bash-read gap (2026-06-04), and it deflated too.** Characterizing
+the 27% bash-file-read: ~39% is scratch/meta (reading my own logs / transcripts / brainstorm
+outputs — atypical, self-inflicted by this period's heavy analysis); ~33% is actually
+command-output piped through `head`/`tail` (MISclassified as a file-read, e.g.
+`copilot --help | head`); ~27% project source/docs (partly diagnostics: `ps`, `grep`). The
+genuinely-avoidable "`cat` a big file I should have bridged" slice is small — and catching the
+rest means re-opening S5 to parse diverse pipes/diagnostics (exactly the false-positive swamp
+S5 fled) for little real gain. **No bash-read fix justified.**
+
+## INVESTIGATION CLOSE (2026-06-04)
+
+Measure-first, run twice, refuted BOTH candidate builds — composed tools (C6) AND a bash-read
+hook. The apparent "leaks" are dominated by atypical heavy-analysis meta-work + a
+classification artifact, not a clean should-have-bridged pattern. **Conclusion: no new
+mechanical tooling is justified by the data; the existing bridge-discipline + Read-tool hook
+are about right.** The auto-trigger severity ruling stands as *discipline*, but does not
+warrant a speculative build. Re-run `docs/notes/leak-probe.py` if normal-work data later shifts
+this. (Net deliverable of the whole C6 line: two speculative builds NOT shipped.)
 
 ## In / out of scope
 
