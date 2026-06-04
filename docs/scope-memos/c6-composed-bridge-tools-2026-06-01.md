@@ -1,10 +1,11 @@
 # Scope Memo (DRAFT) — C6: composed bridge tools (auto-trigger follow-on)
 
-**Status: DRAFT — pending Auditor pass. CONVERGED bottom-line (see "CONVERGED CONCLUSION"):
-MEASURE FIRST, build nothing yet — the iterated adversarial debate inverted "build C6" into
-"instrument a cheap baseline, let the data decide what (if anything) to build".** Feature-intake
-step 2. PA = `docs/prior-art/bridge-auto-trigger-coverage-2026-06-01.md` (C6 was the PA's
-approved "product direction" — now superseded by the converged conclusion).
+**Status: MEASURED (2026-06-04) — the data REFUTES the composed tools.** The baseline probe
+(see "Baseline probe RESULT") shows `git diff` is **0.9%** of what leaks to the frontier (the
+motivating code-review incident was an OUTLIER); the real leaks are **bash file-reads (27%,
+the S5 hole)** + large doc reads. **Composed tools DROPPED; measure-first did its job —
+stopped a build that would have fixed <2% of the problem.** Feature-intake steps 1-2 complete.
+PA = `docs/prior-art/bridge-auto-trigger-coverage-2026-06-01.md`.
 
 **Headline — verdict after the full auditor cycle (independent → rebut → synthesize).**
 PA said "C6 primary"; a 5-platform fanout "converged" on *trigger-first* (but that was
@@ -143,6 +144,36 @@ Humbling but correct: the adversarial cycle talked the design OUT of speculative
 tool-building and INTO measuring first. **That inversion is the deliverable.** (Everything
 above — the two-tool scope, the trigger-first cut, the PA's "C6 primary" — is the trail that
 led here; this section is the conclusion.)
+
+## Baseline probe RESULT (2026-06-04) — the data REFUTES the composed tools
+
+Ran the read-only probe over 170 transcript files (~9.5M chars of tool-results that reached
+the frontier). What actually leaks, by share of bytes:
+- **Bash file-reads (`cat`/`tail`/`sed`) — 27% (the LARGEST).** These BYPASS enforce-bridge
+  (post-S5 the hook scans only the Read tool, not bash).
+- **Large doc/source reads — Read:md 15%, Read:ts 11%, Read:sh 6%, Read:txt 5%** (the .txt are
+  saved tool-output files Read back raw — 40-57K each).
+- Web 8%; **bridge-offloaded 4.6%** (n=289 — what we DID correctly offload).
+- **`git diff` — 0.9%, exactly ONE result >4K.** test 0.9%, lint/build 0.4%.
+
+**Verdict: the composed tools are REFUTED by the data.**
+- `analyze-diff` ≈ 0.9% of leaks; `run-and-analyze-command-output` ≈ 1%. The code-review
+  incident that motivated `analyze-diff` was an OUTLIER, not representative.
+- The real leak is **(a) bash file-reads (27%, the S5 gap)** and **(b) large doc / saved-output
+  reads** — neither is a composed tool; both are TRIGGER / bridge-discipline issues, now
+  EVIDENCE-BASED rather than speculative.
+
+**This is the payoff of measure-first:** it stopped ~10 debate-rounds' worth of composed-tool
+design from shipping a fix for <2% of the actual problem.
+
+*Caveat:* this history is skewed by recent meta-work (the C6 debate itself involved heavy
+doc/log/transcript reading), so the doc-read share is partly inflated — but "git-diff is a
+tiny fraction" is robust regardless.
+
+**New, evidence-based direction (separate decision):** the data points at the **bash-file-read
+gap (the S5 hole)** + **bridging large doc / saved-output reads** — NOT composed tools.
+Pursuing the bash-read gap re-opens the S5 false-positive question and needs its own design
+pass. **Composed tools (C6) = DROPPED, data-refuted.**
 
 ## In / out of scope
 
