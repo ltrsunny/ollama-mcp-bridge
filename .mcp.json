@@ -3,7 +3,7 @@
     "local-mcp-toolbelt": {
       "command": "node",
       "args": [
-        "/Users/rd/ollama-claude/packages/core/dist/bin/cli.js",
+        "${CLAUDE_PLUGIN_ROOT}/packages/core/dist/bin/cli.js",
         "serve"
       ]
     }

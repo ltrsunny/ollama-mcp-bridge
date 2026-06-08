@@ -56,3 +56,13 @@ tmp/
 # Contains a symlink to ~/.gemini/config/projects/<uuid>.json — workspace
 # scope is per-user, not for sharing.
 .antigravitycli/
+
+# Agent-handoff scratch (STATE.md, manifest, snapshots, multi-MB transcript.jsonl)
+# auto-created at repo root by an agent handoff tool (Cursor). Per-machine working
+# state — never commit (privacy + bloat), and keep it out of any git-based plugin
+# install. Keep locally; rm when done with the handoff.
+.agent-handoff/
+
+# Stray CLI cache dir — the toolbelt CLI writes a relative ./cache when run from the
+# repo cwd. Never commit (the sister repo gitignores the same).
+cache/
