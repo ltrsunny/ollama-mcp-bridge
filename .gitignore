@@ -66,3 +66,6 @@ tmp/
 # Stray CLI cache dir — the toolbelt CLI writes a relative ./cache when run from the
 # repo cwd. Never commit (the sister repo gitignores the same).
 cache/
+
+# Agent handoff prompts dropped at the repo root (transient, consumed) — keep out of git.
+handoff-prompt-*.md
