@@ -69,9 +69,15 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
   under this wall. v0.3.0's async-job pattern is the structural fix.
 - **16 GB Mac is the dev hardware**. oMLX serializes on Metal (calls queue).
   8B+14B ≈ 13 GB resident — tight; one tier hot per session.
-  `hot_cache_max_size=6GB` in `~/.omlx/settings.json`. oMLX on HEAD post-
-  2026-05-11 (+ #1126/#1146/#1101 fixes); MlxHttpBackend has a circuit-
-  breaker for mid-request abort. See `docs/notes/v0.5.x-omlx-stability-2026-05-11.md`.
+  `hot_cache_max_size=6GB` in `~/.omlx/settings.json`. **Engine = brew STABLE
+  `omlx 0.4.2` (verified 2026-06-09: strict json_schema + no terminate-crash on
+  moderate decode). The old HEAD-pin (post-2026-05-11 + #1126/#1146/#1101 crash
+  fixes) is DROPPED — 0.4.2's `--memory-guard {safe,balanced,aggressive}` +
+  paged-ssd-cache supersede them.** So plug-and-play install can use
+  `brew install jundot/omlx/omlx` (stable; builds from source ~2 min, no bottle).
+  MlxHttpBackend has a circuit-breaker for mid-request abort. NB: `omlx serve
+  --port N` PERSISTS the port into `~/.omlx/settings.json` (`server.port`) — keep
+  it `8000` (the bridge default). See `docs/notes/v0.5.x-omlx-stability-2026-05-11.md`.
 - **Apache-2.0 license**. New deps must be permissive (Apache / MIT / BSD / ISC).
   Workspace-root `overrides.uuid` ^14 keeps `npm audit` clean.
 - **Node 22+, TypeScript strict, vitest, raw `tsc` build (no bundler)**. Unpacked
