@@ -69,12 +69,17 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
   under this wall. v0.3.0's async-job pattern is the structural fix.
 - **16 GB Mac is the dev hardware**. oMLX serializes on Metal (calls queue).
   8B+14B ≈ 13 GB resident — tight; one tier hot per session.
-  `hot_cache_max_size=6GB` in `~/.omlx/settings.json`. **Engine = brew STABLE
-  `omlx 0.4.2` (verified 2026-06-09: strict json_schema + no terminate-crash on
-  moderate decode). The old HEAD-pin (post-2026-05-11 + #1126/#1146/#1101 crash
-  fixes) is DROPPED — 0.4.2's `--memory-guard {safe,balanced,aggressive}` +
-  paged-ssd-cache supersede them.** So plug-and-play install can use
-  `brew install jundot/omlx/omlx` (stable; builds from source ~2 min, no bottle).
+  `hot_cache_max_size=6GB` in `~/.omlx/settings.json`. **oMLX engine policy (do NOT
+  hardcode a version number here — that's exactly what rotted last time): PIN a
+  known-good TAG and verify it with a REAL chat + strict-JSON probe — NOT a
+  `/v1/models` liveness ping (it 200s even when chat is fully broken), and NOT brew
+  `stable`. On 2026-06-11 the tap moved `stable` to a BROKEN rc (every chat 500s
+  `Chat template error: unicode-escape`), so a bare `brew install jundot/omlx/omlx`
+  gets a dead engine. Current pinned good tag: see `brew list --pinned` + the
+  installed keg (0.4.3, pinned 2026-06-13). Install/repair = build the chosen tag
+  from its historical formula (`git -C "$(brew --repo jundot/omlx)" show
+  <tag-bump-commit>:Formula/omlx.rb` → `brew install` → `brew pin`). v0.7
+  `local-mcp setup`/`doctor` MUST pin a tag + probe real chat, never trust stable.**
   MlxHttpBackend has a circuit-breaker for mid-request abort. NB: `omlx serve
   --port N` PERSISTS the port into `~/.omlx/settings.json` (`server.port`) — keep
   it `8000` (the bridge default). See `docs/notes/v0.5.x-omlx-stability-2026-05-11.md`.
@@ -117,13 +122,20 @@ The Auditor is the user. No code lands ahead of an approved scope memo.
 
 ## Bridge-usage discipline (enforced by hook, not honour-system)
 
-`.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on **Read** that
+`.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on **Read + Bash** that
 *physically blocks* large raw reads (exit 2), routing them to the bridge.
-Enforcement is **Read-only** (no Bash command-scanning — string-parsing shell
-commands was unsound + false-block-prone). Threat model = **agent
+**Read** gates by `file_path`. **Bash** (re-added 2026-06-13 via a 7-voice debate
+that UNANIMOUSLY rejected blocking surgical filters) blocks ONLY whole-file *dump*
+verbs (`cat`/`less`/`more`/`nl`/`tac`/`strings`/`base64`/`xxd`/`od`) on large
+band-matching targets, simple-command-only, with hard bail-to-allow on any
+pipe/chain/redirect/heredoc/`$()`/glob/variable. Surgical `grep`/`sed`/`awk`/`head`/
+`tail` are deliberately NOT scanned (they emit a subset → raw bytes already stay out
+of context; blocking them was the S5 false-positive class). Threat model = **agent
 self-discipline / token economy, NOT security** (→ low false-positive, tolerate
 false-negative). Detail:
-`.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md`.
+`.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md`. A non-parsing
+PostToolUse output-size monitor (the debate's deferred complement, for `python -c` /
+`jq` leaks) is NOT yet built.
 
 Plugin marketplace distribution is **deferred** (structural blocker — plugin
 meta at repo root vs `dist/` gitignored; npm-only for now). See `two-repo-workflow`
