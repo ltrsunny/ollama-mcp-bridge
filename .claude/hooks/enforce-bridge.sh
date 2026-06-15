@@ -6,15 +6,34 @@
 # Why: the soft rule "use bridge for >1KB content" was repeatedly ignored
 # in real sessions. This is the hard-enforcement layer.
 #
-# Scope (2026-05-29): this hook intercepts the Read tool ONLY. The Bash
-# command-scanning branch was REMOVED (S5) — regex-parsing shell command
-# strings is structurally unsound (heredocs, command substitution,
-# quoting, chaining all defeat it) and produced frequent false-blocks.
-# Per the confirmed threat model — self-discipline / token economy, NOT
-# security (.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md) —
-# false-positives are the real cost and an honest agent rarely raw-cats
-# huge files, so the Bash branch was net-negative. The Read tool has a
-# clean structured `file_path` signature with no parsing ambiguity.
+# Scope: intercepts Read AND Bash. Read uses the clean structured
+# `file_path` arg. The Bash branch was REMOVED in S5 (2026-05-29) — regex-
+# parsing arbitrary shell is structurally unsound (heredocs, command
+# substitution, quoting, chaining defeat it) and was the DOMINANT false-
+# positive source. It is RE-ADDED NARROWLY (2026-06-13) after empirical data
+# showed agents bypass the bridge via Bash (one session: ~16 Bash large-file
+# reads vs 2 bridge calls). The re-add survives S5's critique per a 7-voice
+# design debate whose converged rule UNANIMOUSLY rejected the broad "block
+# grep/sed/awk too" option (it resurrects the S5 false-positive class):
+#   - Match ONLY whole-file DUMP verbs (cat less more nl tac strings base64
+#     xxd od). NOT surgical filters (grep/sed/awk/head/tail) — they emit a
+#     small subset, so raw bytes already stay out of context; blocking them
+#     was the S5 false-positive class.
+#   - Only a SIMPLE single command proceeds. BAIL-TO-ALLOW (exit 0) on ANY
+#     pipeline / chain / redirect / heredoc / command-substitution / glob /
+#     variable — both because those defeat sound parsing AND because a dump
+#     verb feeding a pipe (`cat big | grep x`) sends bytes to a filter, not
+#     into the model context.
+#   - Reuse the SAME bands as Read (check_path): block only large external /
+#     analysis-path / data-file targets; in-project source/config + small
+#     files + task-output stay allowed.
+# So bare `cat /big/external.log` is nudged to the bridge; `grep err app.log`,
+# `ps | grep x`, `cat big | head`, `cat small.txt`, `cat src/x.ts` are NOT.
+# A future non-parsing PostToolUse output-size monitor (the debate's deferred
+# complement) can catch python -c / jq leaks without touching shell parsing.
+# Threat model unchanged — self-discipline / token economy, NOT security
+# (.claude/brainstorm/bridge-hook-threat-model-2026-05-29.md): low false-
+# positive is paramount; missed reads (false-negatives) are tolerated.
 # Shipped to users via the local-mcp-toolbelt plugin (hooks/hooks.json).
 # Knobs stay generic (env vars; no project-specific paths hard-coded).
 #
@@ -338,6 +357,50 @@ check_path() {
   return 0
 }
 
+# Scan a Bash command for whole-file DUMP reads of band-matching files.
+# Narrow + sound by construction (see Scope comment): bail-to-allow on ANY
+# shell construct we can't parse as a single simple command, match only
+# dump verbs, and defer to check_path for the band/exemption/size logic.
+scan_bash_command() {
+  local cmd="$1"
+  # Bail-to-allow on any construct that (a) defeats single-command token
+  # parsing or (b) means a dump verb's bytes go to a filter/file, not the
+  # model context. Conservative by design — the S5 low-false-positive rule.
+  case "$cmd" in
+    *'|'* | *';'* | *'&'* | *'<'* | *'>'* | *'$('* | *'`'* | *'$'* | *'*'* | *'?'* | *'['*)
+      return 0 ;;
+  esac
+  local -a toks=()
+  read -r -a toks <<<"$cmd" || true
+  [ "${#toks[@]}" -eq 0 ] && return 0
+  # Skip leading VAR=val env assignments; first real token is the command.
+  local idx=0
+  while [ "$idx" -lt "${#toks[@]}" ]; do
+    case "${toks[$idx]}" in
+      [A-Za-z_]*=*) idx=$((idx + 1)) ;;
+      *) break ;;
+    esac
+  done
+  [ "$idx" -ge "${#toks[@]}" ] && return 0
+  local verb
+  verb="$(basename -- "${toks[$idx]}" 2>/dev/null || true)"
+  case "$verb" in
+    cat | less | more | nl | tac | strings | base64 | xxd | od) ;;
+    *) return 0 ;; # not a whole-file dump verb (incl. surgical grep/sed/awk/head/tail)
+  esac
+  # Remaining non-flag tokens are literal path args (globs/vars bailed above).
+  local j=$((idx + 1)) tok abs
+  while [ "$j" -lt "${#toks[@]}" ]; do
+    tok="${toks[$j]}"
+    j=$((j + 1))
+    case "$tok" in -*) continue ;; esac
+    abs="$(resolve_path "$tok")"
+    [ -z "$abs" ] && continue
+    check_path "$abs" # exits 2 if blocked
+  done
+  return 0
+}
+
 # ---------- dispatch -------------------------------------------------------
 case "$TOOL_NAME" in
   Read)
@@ -345,6 +408,13 @@ case "$TOOL_NAME" in
     PATH_ABS="$(resolve_path "$PATH_RAW")"
     [ -z "$PATH_ABS" ] && exit 0
     check_path "$PATH_ABS"
+    exit 0
+    ;;
+
+  Bash)
+    CMD="$(jq -r '.tool_input.command // ""' <<<"$INPUT")"
+    [ -z "$CMD" ] && exit 0
+    scan_bash_command "$CMD"
     exit 0
     ;;
 

@@ -64,33 +64,72 @@ else
 fi
 rm -rf "$A4_DIR" "$A4_CTRL_DIR"
 
-# ----------- S5: Bash command scanning removed ----------------------------
-# Replaces the former B1 first-word-allowlist tests. S5 (2026-05-29) dropped
-# the Bash branch entirely — enforcement now lives ONLY at the structured
-# Read boundary. Per the confirmed self-discipline threat model, an honest
-# agent rarely raw-cats huge files, and command-string parsing was the
-# dominant false-positive source (heredoc, reader-verb-tail, chaining).
-echo "[S5 -- Bash command scanning removed]"
+# ----------- S6: Bash whole-file-dump detection (re-added 2026-06-13) ------
+# S5 (2026-05-29) had REMOVED Bash scanning entirely. It is RE-ADDED NARROWLY
+# after empirical bypass data (one session: ~16 Bash large-file reads vs 2
+# bridge calls). A 7-voice design debate UNANIMOUSLY rejected the broad option
+# (blocking surgical grep/sed/awk/head/tail). Scope: block only whole-file
+# DUMP verbs (cat/less/more/nl/tac/strings/base64/xxd/od) on a band-matching
+# target, SIMPLE-command only, bail-to-allow on ANY pipeline / chain /
+# redirect / heredoc / command-substitution / glob / variable.
+echo "[S6 -- Bash whole-file-dump detection]"
 
-# Bash cat of an external file is NO LONGER scanned -> exits 0.
-bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Bash","tool_input":{"command":"cat /Users/rd/.claude.json"}}
+# Hermetic fixtures under a mktemp dir (external = not allow-listed), sizes
+# verified so a failed write FAILs loudly instead of passing blank.
+S6_DIR="$(mktemp -d /tmp/s6-enforcetest-XXXXXX)"
+S6_BIG="$S6_DIR/big.log"      # external, >4KB
+S6_SMALL="$S6_DIR/small.txt"  # external, <4KB
+yes "padding payload line for the dump-detection fixture." | tr -d '\n' | head -c 8192 > "$S6_BIG" 2>/dev/null
+printf 'small\n' > "$S6_SMALL"
+S6_BIG_SZ="$(wc -c < "$S6_BIG" 2>/dev/null | tr -d '[:space:]')"
+if [ "${S6_BIG_SZ:-0}" != "8192" ]; then
+    FAIL=$((FAIL+1)); printf '  FAIL  S6 setup -- big fixture wrong size (%s want 8192)\n' "${S6_BIG_SZ:-0}"
+else
+    # CORE: bare `cat` of a large external file is now BLOCKED (the bypass S5 left open).
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Bash","tool_input":{"command":"cat $S6_BIG"}}
 JSONEOF
-assert_exit "S5.1 Bash cat external exits 0 (Bash branch removed)" 0 "$?"
+    assert_exit "S6.1 Bash cat large external is BLOCKED (exit 2) -- closes the bypass" 2 "$?"
 
-# The whole git-commit-heredoc false-block class is gone by construction.
-bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Bash","tool_input":{"command":"git commit -m \"$(cat <<EOF /Users/rd/.claude.json EOF)\""}}
+    # Surgical grep on the SAME large file is ALLOWED (not a dump verb; emits a subset).
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Bash","tool_input":{"command":"grep ERROR $S6_BIG"}}
 JSONEOF
-assert_exit "S5.2 git commit heredoc exits 0 (no Bash scanning, no false-block)" 0 "$?"
+    assert_exit "S6.2 Bash grep large external is ALLOWED (surgical filter, not a dump)" 0 "$?"
 
-# Enforcement preserved where it's structured: Read of the SAME external
-# file STILL blocks. That is the point of S5 — move enforcement off the
-# leaky Bash string-scan onto the clean Read signature.
-bash "$HOOK" 2>/dev/null <<'JSONEOF'
-{"tool_name":"Read","tool_input":{"file_path":"/Users/rd/.claude.json"}}
+    # A dump verb feeding a pipe sends bytes to a filter, not the model context -> ALLOWED.
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Bash","tool_input":{"command":"cat $S6_BIG | head"}}
 JSONEOF
-assert_exit "S5.3 Read same external still exits 2 (enforcement preserved on Read)" 2 "$?"
+    assert_exit "S6.3 Bash cat large | head is ALLOWED (pipeline bail-to-allow)" 0 "$?"
+
+    # cat of a SMALL external file -> ALLOWED (under threshold).
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Bash","tool_input":{"command":"cat $S6_SMALL"}}
+JSONEOF
+    assert_exit "S6.4 Bash cat small external is ALLOWED (under threshold)" 0 "$?"
+
+    # Read of the SAME large external still blocks (structured-boundary regression).
+    bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Read","tool_input":{"file_path":"$S6_BIG"}}
+JSONEOF
+    assert_exit "S6.5 Read large external still exits 2 (Read enforcement unchanged)" 2 "$?"
+fi
+rm -rf "$S6_DIR"
+
+# Heredoc / command-substitution STILL exit 0 — the git-commit-heredoc
+# false-block class S5 fixed stays fixed (we bail-to-allow on these).
+bash "$HOOK" 2>/dev/null <<'JSONEOF'
+{"tool_name":"Bash","tool_input":{"command":"git commit -m \"$(printf done)\""}}
+JSONEOF
+assert_exit "S6.6 git commit with command-substitution exits 0 (bail-to-allow, no false-block)" 0 "$?"
+
+# A `cat` of an in-project / allow-listed file (the hook itself, >4KB) is
+# never blocked — only external/analysis/data bands enforce.
+bash "$HOOK" 2>/dev/null <<JSONEOF
+{"tool_name":"Bash","tool_input":{"command":"cat $HOOK"}}
+JSONEOF
+assert_exit "S6.7 Bash cat in-project allow-listed file exits 0" 0 "$?"
 
 # ----------- B3: dynamic error text ---------------------------------------
 echo "[B3 -- dynamic error text]"
