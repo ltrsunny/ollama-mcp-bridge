@@ -264,6 +264,82 @@ nv_pro independently: "Qwen and Yi the only viable CJK options, shortlist comple
 the Yi-1.5-6B-vs-Qwen CJK eval ONLY if real CJK extract/summarize quality issues surface in
 use. **This PA is a CLOSED decision, not pending.**
 
+## 2026-06-13 grounded re-check — RETRACTED; corrected 2026-06-15
+
+⚠️ **The first grounded pass (2026-06-13) was WRONG and is retracted.** It concluded "no
+newer Qwen3 exists" and recorded KEEP-as-fact. That was a FALSE NEGATIVE from a broken
+query: `search=Qwen3&limit=300` is relevance/download-ranked (the popular incumbent
+dominated the top-300, ranking newer low-download models out) AND a `grep instruct` filter
+excluded the real mlx builds (named `-OptiQ-4bit` / `-MTP-4bit`, no "instruct" token). It
+even mis-accused the fanout of "fabricating" Qwen3.5 — which is REAL. **Lesson: a
+badly-constructed grounded query is a false-negative wearing a grounded costume — MORE
+dangerous than honest fanout confabulation, because it reads as authoritative.** (Caught by
+the Auditor, 2026-06-15: "HF 上有大量 Qwen 3.5 和 3.6,都核查了吗？")
+
+**CORRECTED grounded facts (byte-exact, HF API, 2026-06-15):**
+- **Qwen3.5 (0.8B / 2B / 4B / 9B + MoE) and Qwen3.6 (27B / 35B-A3B) DO exist**, apache-2.0,
+  with mlx-community 4-bit builds (newest 2026-06-14).
+- **BUT Qwen3.5 small models are MULTIMODAL** (`pipeline_tag=image-text-to-text` for all of
+  0.8B/2B/4B/9B) — a VLM family, NOT a clean pure-text successor to the text-only
+  `Qwen3-4B-Instruct-2507`. No Qwen-OFFICIAL non-thinking text "Instruct" SKU (the
+  `-Instruct` repos are third-party finetunes); usable mlx builds = `Qwen3.5-4B-OptiQ-4bit`
+  / `-MTP-4bit` (base).
+- Qwen3.6 has no small dense variant (27B / 35B-A3B only → exceeds 16 GB).
+
+**Corrected verdict: the incumbents are NOT "confirmed best" (that claim is retracted), and
+an upgrade is NOT a slam-dunk either.** `Qwen3.5-4B` is a REAL newer Apache candidate, but
+it is a **VLM** (extra vision-tower footprint; no clean text-instruct SKU), so whether it
+beats the pure-text `Qwen3-4B-Instruct-2507` on the bridge's text-only schema/summarize +
+CJK tasks is an **EMPIRICAL question → run OPEN②'s eval**, do not decide by assertion. Until
+eval, incumbents remain the status quo (not a proven optimum). Confirm Qwen3.5's
+architecture/thinking-behavior at eval time.
+
+## 2026-06-15 — Qwen3.5-4B evaluated → KEEP (evidence-based)
+
+Smoke-test (oMLX 0.4.3): `Qwen3.5-4B-4bit` (2.9 GB) loads + serves. Gotcha: it is
+thinking-by-default and **`/no_think` (the Qwen3 token) does NOT suppress it** — only
+`chat_template_kwargs.enable_thinking=false` does (verified SAFE + effective on the
+incumbent Qwen3-4B-Instruct-2507 and Qwen3-8B too, so it could be added to MlxHttpBackend
+unconditionally if ever adopted). With that flag, strict-JSON binds cleanly incl. CJK.
+
+Fair quality A/B (both models, `enable_thinking=false`, decisive CJK+EN tasks):
+- **extract / classify (EN + CJK): IDENTICAL correct output** (`张伟/42/上海`, `财经`,
+  `Bob/25/Boston`) — strict grammar makes the structured tools a wash.
+- **summarize (CJK free-text): comparable; the incumbent was slightly MORE CONCISE**, Qwen3.5-4B
+  slightly more verbose/editorializing (worse fit for the "short faithful summary" goal).
+
+**Verdict: KEEP Qwen3-4B-Instruct-2507 / Qwen3-8B.** No measurable quality win for Qwen3.5-4B
+on the bridge's tasks, while it is bigger (2.9 vs 2.27 GB), a VLM (dead vision tower), and
+would need new `enable_thinking=false` backend wiring. This KEEP is now backed by a fair A/B,
+NOT the retracted broken-search assertion above. The full-harness eval (NIM judge, multi-trial,
+zh fixtures, RAM/latency gates) + the backend `enable_thinking` change are available if a
+definitive benchmark is ever wanted, but the A/B shows no advantage to justify that investment.
+A downloaded `~/.omlx/models/Qwen3.5-4B-4bit` keg remains for re-eval if desired.
+
+## 2026-06-15 — comprehensive 2026-06 candidate sweep → KEEP confirmed across the field
+
+Auditor pushed (correctly) for a LATEST-models sweep, not just Qwen3.5. Grounded HF-API recency
+sweep (`sort=lastModified`) + per-candidate license/pipeline/size + smoke + A/B. The full 2026-06
+small-model field, every candidate ruled out:
+- **Qwen3.6**: only 27B / 35B-A3B (no small dense) → exceeds 16 GB.
+- **MiniCPM3-4B** (apache, 2.2 GB, tier-B candidate): **CJK classify 1/4** (mislabeled finance as
+  科技, defaulted to 科技, one malformed `["技"]`) vs incumbent 4/4 — decisively worse.
+- **MiniCPM4.1-8B** (apache, 4.3 GB): OOMs at the safe memory guard (projected ~10.7 GB > ~9.75 GB)
+  — does NOT load where Qwen3-8B fits.
+- **InternLM3-8B** (apache, 4.6 GB): requires `trust_remote_code` — oMLX/transformers refuses custom
+  remote code by default → cannot load at all.
+- **GLM-5 / GLM-4.5-Air / GLM-4.7-Flash**: 390 / 56 / 31 GB (MoE/huge) → exceed 16 GB.
+- **gemma-4** (gemma license, non-permissive), **Hunyuan-MT-7B** (license unverified + MT-only +
+  11.8 GB), **NVIDIA-Nemotron-3-Nano-4B** (license `other` + English-leaning).
+
+**Final verdict: KEEP `Qwen3-4B-Instruct-2507` (B) + `Qwen3-8B` (C).** Across the entire mid-2026
+small-model field, none beats the incumbents on the bridge's CJK + structured tasks within the
+16 GB / permissive-license / oMLX-0.4.3-loadable constraints. **Process lesson: fanout confabulated
+candidates; a broken grounded search produced a false-negative (missed Qwen3.5/3.6); only the
+recency-sorted grounded sweep + actual load/smoke/A/B gave the real answer — verify the verifier.**
+Downloaded candidate kegs (Qwen3.5-4B, MiniCPM3-4B, MiniCPM4.1-8B, internlm3-8b ≈ 14 GB total under
+`~/.omlx/models/`) can be removed to reclaim space.
+
 ## Cross-references
 - Deep-research run: `wf_19a8f6b5-399` (search+fetch OK; verify layer failed).
 - Verification fanout: `bedvwsu2f` (1/3 voices delivered; citations fabricated).
