@@ -137,9 +137,12 @@ false-negative). Detail:
 PostToolUse output-size monitor (the debate's deferred complement, for `python -c` /
 `jq` leaks) is NOT yet built.
 
-Plugin marketplace distribution is **deferred** (structural blocker — plugin
-meta at repo root vs `dist/` gitignored; npm-only for now). See `two-repo-workflow`
-memory + `.claude/brainstorm/plugin-file-layout-structural-brief-2026-05-26.md`.
+Plugin distribution: the `dist`-gitignored structural blocker is **resolved in DESIGN** —
+`docs/scope-memos/v0.7.0-install-2026-05-15.md` (Draft 2, 2026-06-13) picks **route α**: ship the
+built `dist` inside the plugin (un-gitignored on a release tag); `.mcp.json` launches
+`${CLAUDE_PLUGIN_ROOT}/.../dist`. NOT yet implemented (v0.7 work); npm-publish stays the alt channel.
+See that memo + `two-repo-workflow` memory +
+`.claude/brainstorm/plugin-file-layout-structural-brief-2026-05-26.md`.
 
 Three Read enforcement bands (threshold 4 KB):
 - **External files** — outside project + `~/.claude` + `~/.omlx`. Route via `source_uri`.

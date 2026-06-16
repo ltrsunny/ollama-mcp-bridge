@@ -1,6 +1,8 @@
 # Prior Art Review — local model selection for the bridge
 
 **Status: FINAL (2026-05-31) — verdict KEEP Qwen3 as the shipped default (both slots).**
+**[Re-confirmed 2026-06-15 — grounded HF recency sweep + full candidate bakeoff (Qwen3.5/3.6,
+MiniCPM3/4.1, InternLM3, GLM all ruled out); see the 2026-06-13 → 2026-06-15 sections at the end.]**
 The empirical local eval ("OPEN②", end of doc) is the *confirmation* step, not a gate:
 the verdict stands on engine-guaranteed JSON validity (model-independent) + Qwen's
 structural CJK token-efficiency + three independent adversarial passes finding no

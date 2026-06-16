@@ -2,6 +2,15 @@
 
 **For:** v0.7 plug-and-play install scope memo (B — "others install the plugin AND it just works").
 **Date:** 2026-06-10. **Method:** auditor-protocol fanout, ≥2 independent families.
+
+**⚠ Status (2026-06-15): SUPERSEDED on all design decisions** by
+`docs/scope-memos/v0.7.0-install-2026-05-15.md` **Draft 2** (2026-06-13), which RESOLVED every "Open
+design tension" below and CORRECTED details via the adversarial review: FORK A → **α** (ship built
+dist, NOT npx); port **read-from-settings**, not hardcoded 8000; **static** setup-marker, not
+`${CLAUDE_PLUGIN_DATA}`; doctor = **real chat + golden-output** (a `/v1/models` ping passes even when
+chat is broken — proven by the 2026-06-13 oMLX `0.4.4rc1` incident). This PA is the research INPUT;
+the memo is the current decision. (Note below: doctor's "1-token generation" + "port 8000" + the
+`${CLAUDE_PLUGIN_DATA}` nudge marker are the as-of-2026-06-10 framing, since corrected in the memo.)
 **Fanout health note:** first attempts hit a portfolio outage (AI Studio REST `gem` daily-quota +
 503; GitHub Models 429; Copilot Premium 402). Per the [fanout-breakage handoff rule] the breakage
 was handed to the `llm-orchestration` sister, which fixed the AI-Studio health-probe false-kill +
