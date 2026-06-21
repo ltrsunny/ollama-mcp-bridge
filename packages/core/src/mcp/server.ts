@@ -210,6 +210,20 @@ function toolCallError(err: unknown) {
 }
 
 /**
+ * Image calls force tier V and the handlers read `config.tiers.V` (label, numCtx)
+ * BEFORE `backendForTool` runs its own tier guard — so a custom config without a
+ * V tier would crash on `tierModelLabel(undefined)` first. Guard at the call site.
+ */
+function tierVMissingError() {
+  return {
+    isError: true as const,
+    content: [{ type: 'text' as const, text:
+      'Tier V (Qwen3-VL) is not configured — image input requires it. Add a ' +
+      'tiers.V entry to your BridgeConfig, or run `download-models` to fetch the VLM.' }],
+  };
+}
+
+/**
  * Proactive size guard: reject an input that can't fit the tier's context
  * BEFORE sending it (so the caller gets an actionable message instead of the
  * opaque oMLX prefill_memory_exceeded 400 — sister bug report 2026-06-17).
@@ -434,6 +448,7 @@ export function buildBridgeServer(
         // IMAGE path → tier V (VLM). No text defender (no text to scan).
         const vKey: Tier = 'V';
         const vCfg = config.tiers[vKey];
+        if (vCfg === undefined) return tierVMissingError();
         const ti = Date.now();
         await sendProgress(extra, 1, 2, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
         try {
@@ -814,6 +829,7 @@ export function buildBridgeServer(
         // IMAGE path → tier V (VLM). No text defender (no text to scan).
         const vKey: Tier = 'V';
         const vCfg = config.tiers[vKey];
+        if (vCfg === undefined) return tierVMissingError();
         const ti = Date.now();
         await sendProgress(extra, 1, 2, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
         try {
@@ -963,6 +979,7 @@ export function buildBridgeServer(
         if (src.kind === 'image') {
           const vKey: Tier = 'V';
           const vCfg = config.tiers[vKey];
+          if (vCfg === undefined) return tierVMissingError();
           await sendProgress(extra, 2, 3, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
           const vBackend = backendForTool(config, 'extract', vKey);
           const vres = await vBackend.chat(

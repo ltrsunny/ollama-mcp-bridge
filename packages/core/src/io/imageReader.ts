@@ -31,7 +31,7 @@
  *   (input byte cap + timeout reuse OMCP_URL_MAX_BYTES / OMCP_URL_TIMEOUT_MS)
  */
 
-import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -198,13 +198,17 @@ export async function readImageSource(
     } catch {
       throw new Error(`Cannot convert file URI to path: "${uri}"`);
     }
-    raw = await readFile(filePath); // throws ENOENT / EACCES naturally
-    if (raw.byteLength > opts.maxBytes) {
+    // stat() BEFORE readFile so a huge local file is rejected without first
+    // buffering it all into memory (OOM guard for file:// — mirrors the
+    // streaming cap on the http path).
+    const st = await stat(filePath); // throws ENOENT / EACCES naturally
+    if (st.size > opts.maxBytes) {
       throw new Error(
-        `Image size ${raw.byteLength} bytes exceeds limit ${opts.maxBytes} bytes. ` +
+        `Image size ${st.size} bytes exceeds limit ${opts.maxBytes} bytes. ` +
           `Set OMCP_URL_MAX_BYTES to raise the limit.`,
       );
     }
+    raw = await readFile(filePath);
   } else if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
     // Host policy + per-hop-revalidated redirects + timeout (SSRF-safe), then a
     // STREAMING byte cap — never buffer the whole body before the size check

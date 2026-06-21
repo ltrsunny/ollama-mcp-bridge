@@ -171,7 +171,16 @@ export async function safeFetch(
         if (hop >= maxRedirects) {
           throw new Error(`Too many redirects (>${maxRedirects}) for "${initialUrl}"`);
         }
-        url = new URL(loc, url).toString(); // resolve relative Location
+        const next = new URL(loc, url); // resolve relative Location
+        // Only follow http(s) redirects — a Location: file://, data:, gopher:, …
+        // must not be followed (the next-hop host check would also catch file://
+        // via its empty hostname, but reject the scheme explicitly + clearly).
+        if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+          throw new Error(
+            `Refusing to follow a non-HTTP(S) redirect (scheme "${next.protocol}") for "${initialUrl}"`,
+          );
+        }
+        url = next.toString();
         continue;
       }
       return res;

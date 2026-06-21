@@ -66,6 +66,17 @@ describe('safeFetch — SSRF redirect re-validation', () => {
     vi.stubGlobal('fetch', mockFetch);
     await expect(safeFetch('http://public.example/start', OPTS)).rejects.toThrow(/redirect/i);
   });
+
+  it('refuses a non-HTTP(S) redirect (file://, data:, …)', async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      status: 302,
+      ok: false,
+      headers: headers({ location: 'file:///etc/passwd' }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    await expect(safeFetch('http://public.example/x', OPTS)).rejects.toThrow(/non-HTTP/i);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // never fetched the file:// target
+  });
 });
 
 describe('readCappedBody — streaming byte cap', () => {
