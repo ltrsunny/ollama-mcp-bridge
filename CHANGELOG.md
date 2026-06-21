@@ -38,6 +38,12 @@ never enter frontier context (the largest per-call frontier saving of any tool).
   return an actionable error (use `summarize-long-chunked` / async-job, or raise
   oMLX `memory_guard_tier`) *before* the call, plus a translation of oMLX's
   prefill memory-guard 400 — instead of an opaque failure on large files.
+- **Silent empty completions** — `MlxHttpBackend.chat` now THROWS when oMLX
+  returns a 200 with an empty completion (`in=0/out=0` — e.g. a decode abort or a
+  prefill memory-guard soft-reject) instead of passing the blank result through as
+  success. This funnels through the one shared `chat` path, so it protects every
+  tool (summarize/extract/classify/transform) from silently corrupting downstream
+  output. (Observed deterministically on a ~9.9 K-token `summarize-long` input.)
 - **SSRF via HTTP redirects** — `safeFetch` re-validates every redirect hop's
   host (`redirect: 'manual'`, ≤3 hops, intermediate bodies cancelled); shared by
   the text and image source readers.

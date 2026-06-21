@@ -481,6 +481,23 @@ export class MlxHttpBackend implements LlmBackend {
     const promptTokens = data.usage?.prompt_tokens ?? 0;
     const completionTokens = data.usage?.completion_tokens ?? 0;
 
+    // An empty completion is NEVER a valid success. oMLX returns a 200 with
+    // empty content (and typically prompt_tokens=0/completion_tokens=0) when a
+    // decode aborts or the prefill memory guard soft-rejects — observed
+    // DETERMINISTICALLY on a ~9.9 K-token input under 16 GB pressure. Returning
+    // it as an empty-but-successful result silently corrupts EVERY downstream
+    // consumer (summarize/extract/classify/transform all funnel through here),
+    // so fail loudly instead. The `in=0 out=0` footer was the tell.
+    if (text.trim() === '') {
+      throw new Error(
+        `MlxHttpBackend: oMLX returned an EMPTY completion ` +
+          `(prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}). ` +
+          `Likely a decode abort or a prefill memory-guard rejection under memory ` +
+          `pressure. For a large input use summarize-long-chunked or shrink it; ` +
+          `otherwise retry once the engine is idle.`,
+      );
+    }
+
     return { text, promptTokens, completionTokens };
   }
 

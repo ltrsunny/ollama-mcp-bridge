@@ -209,16 +209,28 @@ describe('MlxHttpBackend', () => {
     expect(body.max_tokens).toBeUndefined();
   });
 
-  it('handles empty completions gracefully (no choices)', async () => {
+  it('THROWS on an empty completion — no choices (silent-empty guard)', async () => {
+    // An empty completion must fail loudly, never return empty-success: oMLX
+    // returns a 200 with empty content on a decode-abort / prefill-guard reject,
+    // and passing that through silently corrupts every downstream tool.
+    // Regression: summarize-long deterministically returned in=0/out=0.
     const mockFetch = vi.fn().mockResolvedValue(
       makeOkResponse({ id: 'x', choices: [] }),
     );
     vi.stubGlobal('fetch', mockFetch);
 
-    const result = await backend.chat({ user: 'hi', maxInputTokens: 4096 });
-    expect(result.text).toBe('');
-    expect(result.promptTokens).toBe(0);
-    expect(result.completionTokens).toBe(0);
+    await expect(
+      backend.chat({ user: 'hi', maxInputTokens: 4096 }),
+    ).rejects.toThrow(/empty completion/i);
+  });
+
+  it('THROWS on an empty completion — choices present but blank content', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(makeOkResponse(chatResponse('')));
+    vi.stubGlobal('fetch', mockFetch);
+
+    await expect(
+      backend.chat({ user: 'hi', maxInputTokens: 4096 }),
+    ).rejects.toThrow(/empty completion/i);
   });
 
   // ── error handling ────────────────────────────────────────────────────
