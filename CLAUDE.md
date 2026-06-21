@@ -75,8 +75,13 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
   `/v1/models` liveness ping (it 200s even when chat is fully broken), and NOT brew
   `stable`. On 2026-06-11 the tap moved `stable` to a BROKEN rc (every chat 500s
   `Chat template error: unicode-escape`), so a bare `brew install jundot/omlx/omlx`
-  gets a dead engine. Current pinned good tag: see `brew list --pinned` + the
-  installed keg (0.4.3, pinned 2026-06-13). Install/repair = build the chosen tag
+  gets a dead engine. The BREAKAGE was rc1-specific — the **0.4.4 FINAL release fixed
+  the unicode-escape bug**; verified-good on 2026-06-17 (real chat + strict-JSON AND
+  Qwen3-VL image + strict-JSON both pass) and pinned. Current pinned good tag: see
+  `brew list --pinned` + the installed keg (0.4.4, pinned 2026-06-17 — supersedes the
+  earlier 0.4.3 pin). Lesson stands: verify EACH new tag with a real chat + VLM-image
+  probe before trusting it; never trust `stable` or a `/v1/models` ping.
+  Install/repair = build the chosen tag
   from its historical formula (`git -C "$(brew --repo jundot/omlx)" show
   <tag-bump-commit>:Formula/omlx.rb` → `brew install` → `brew pin`). v0.7
   `local-mcp setup`/`doctor` MUST pin a tag + probe real chat, never trust stable.**
