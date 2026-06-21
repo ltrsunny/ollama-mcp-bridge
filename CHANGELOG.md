@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Theme
+
+**"Multimodal offload — local VLM tier."** Images are the most token-expensive
+bytes in the frontier; the bridge gains a vision tier so `extract`, `classify`,
+and `summarize` can run over an image `source_uri` locally — raw image bytes
+never enter frontier context (the largest per-call frontier saving of any tool).
+
+### Added
+
+- **Tier V** (`Qwen3-VL-4B-Instruct-4bit`, Apache-2.0, ~2.9 GB) — the dedicated
+  Qwen3-VL vision-language model, picked via a 9-model bakeoff + hard-suite +
+  quant + real-render checks (see `docs/scope-memos/v0.8.0-multimodal-2026-06-16.md`).
+  Thinking suppressed via `chat_template_kwargs` (`/no_think` is inert on Qwen3-VL).
+- **Image input on `extract` / `classify` / `summarize`** via an image
+  `source_uri` (`file://` or `http(s)://`; png/jpg/webp) plus a `modality`
+  (`auto` | `image` | `text`) knob; `auto` sniffs by file extension.
+- `io/imageReader.ts` — image fetch (SSRF-guarded, shared with the text reader)
+  + magic-byte MIME sniff (PDF rejected with a deferred-support message) +
+  `sips` downscale to ≤1568 px (dimension-gated so already-small images are not
+  re-encoded/bloated).
+- `download-models` fetches tier V by default; `--tiers B,C` for a text-only install.
+- enforce-bridge hook routes project image reads (png/jpg/jpeg/webp) to the bridge.
+
+### Fixed
+
+- **Oversize text inputs** (`summarize-long` / `summarize` / `extract`) now
+  return an actionable error (use `summarize-long-chunked` / async-job, or raise
+  oMLX `memory_guard_tier`) *before* the call, plus a translation of oMLX's
+  prefill memory-guard 400 — instead of an opaque failure on large files.
+- **SSRF via HTTP redirects** — `safeFetch` re-validates every redirect hop's
+  host (`redirect: 'manual'`, ≤3 hops, intermediate bodies cancelled); shared by
+  the text and image source readers.
+- **Memory DoS** — `readCappedBody` streams the response with a hard byte cap
+  (Content-Length preflight + mid-stream cancel) instead of buffering the whole
+  body before checking its size.
+- `backendForTool` fails cleanly when a forced tier is unconfigured (no
+  `TypeError` crash); the backend cache key now includes `thinkingMode`.
+
+### Engine
+
+- Verified + pinned oMLX **0.4.4** — real chat + strict-JSON AND Qwen3-VL image
+  + strict-JSON both pass. The 0.4.4-final release fixed the rc1 unicode-escape bug.
+
+---
+
 ## [0.6.0] — 2026-05-18
 
 ### Theme

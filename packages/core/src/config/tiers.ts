@@ -29,7 +29,7 @@
  *   brew services start jundot/omlx/omlx
  */
 
-export type Tier = 'B' | 'C' | 'D';
+export type Tier = 'B' | 'C' | 'D' | 'V';
 
 export interface TierConfig {
   /**
@@ -55,8 +55,22 @@ export interface TierConfig {
    * Tier B → 8192   (fast 4B model)
    * Tier C → 32768  (8B model with longer context)
    * Tier D → 16384  (14B model; ~9-10 GB at this context size)
+   * Tier V → 32768  (Qwen3-VL-4B vision model; image-bearing calls)
    */
   numCtx?: number;
+  /**
+   * How `MlxHttpBackend` suppresses the model's reasoning trace for this tier.
+   *
+   * - `'no_think'` (default): append `/no_think` to the user prompt. Works on
+   *   Qwen3 thinking models (8B/14B); inert on the non-thinking Instruct-2507.
+   * - `'chat_template'`: send `chat_template_kwargs: { enable_thinking: false }`
+   *   in the request, leaving the prompt untouched. Required for Qwen3-VL /
+   *   Qwen3.5 — `/no_think` does NOT disable thinking on those chat templates.
+   *
+   * Absent → `'no_think'` (preserves the exact B/C/D request contract captured
+   * by `migration-snapshot.test.ts`).
+   */
+  thinkingMode?: 'no_think' | 'chat_template';
 }
 
 export interface BridgeConfig {
@@ -98,6 +112,20 @@ export const DEFAULT_CONFIG: BridgeConfig = {
       // toolTierMap so only one of C/D is hot per session.
       mlxModelName: 'Qwen3-14B-4bit',
       numCtx: 16384,
+    },
+    V: {
+      mlxUrl: DEFAULT_MLX_URL,
+      // Qwen3-VL-4B-Instruct (Apache-2.0). 4-bit MLX ≈ 2.9 GB resident. The
+      // dedicated Qwen3 vision-language line (arch `qwen3_vl`) — NOT the unified
+      // Qwen3.5. Selected via a 9-model bakeoff + hard-suite + quant + real-render
+      // robustness checks (docs/scope-memos/v0.8.0-multimodal-2026-06-16.md §0.5):
+      // 16/16 on the clean suite, hard-suite winner-by-balance, 4-bit == 8-bit
+      // quality at half the size + ~2× speed. Image-bearing extract/classify/
+      // summarize calls route here. Thinking suppressed via chat_template_kwargs
+      // (Qwen3-VL ignores `/no_think`).
+      mlxModelName: 'Qwen3-VL-4B-Instruct-4bit',
+      numCtx: 32768,
+      thinkingMode: 'chat_template',
     },
   },
   defaultTier: 'B',

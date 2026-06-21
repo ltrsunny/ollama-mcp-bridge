@@ -46,6 +46,16 @@ export interface ChatOptions {
    * know which models are thinking-capable. See scope memo v0.6.0 §4.
    */
   disableThinking?: boolean;
+  /**
+   * Image inputs for multimodal (VLM) calls. Each entry is a data URI
+   * (`data:image/png;base64,…` or `image/jpeg`/`image/webp`). When present and
+   * non-empty, a vision-capable backend sends a multimodal content array
+   * (one text part + one `image_url` part per image) instead of a plain
+   * string; a text-only backend ignores them. Populated by the `source_uri`
+   * resolver after fetching + downscaling; raw image bytes never reach the
+   * frontier. See docs/scope-memos/v0.8.0-multimodal-2026-06-16.md.
+   */
+  images?: string[];
   // NOTE: `stopSequences` deferred until a real consumer needs it; keep the interface minimal.
 }
 

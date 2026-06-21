@@ -40,12 +40,16 @@ const MODELS = {
   },
   C: { repo: 'mlx-community/Qwen3-8B-4bit', dir: 'Qwen3-8B-4bit' },
   D: { repo: 'mlx-community/Qwen3-14B-4bit', dir: 'Qwen3-14B-4bit' },
+  // v0.8.0: Tier V — the dedicated Qwen3-VL vision model (~2.9 GB). Powers the
+  // multimodal image tools (extract/classify/summarize over an image source_uri).
+  V: { repo: 'mlx-community/Qwen3-VL-4B-Instruct-4bit', dir: 'Qwen3-VL-4B-Instruct-4bit' },
 };
 
 function parseArgs(argv) {
-  // v0.6.0: Tier D removed from default — demoted to power-user opt-in.
-  // Pass `--tiers B,C,D` to include 14B.
-  const out = { tiers: ['B', 'C'] };
+  // v0.6.0: Tier D removed from default — demoted to power-user opt-in (--tiers B,C,D).
+  // v0.8.0: Tier V (vision, ~2.9 GB) IS in the default so the multimodal image
+  // tools work out of the box; drop it with `--tiers B,C` for a text-only install.
+  const out = { tiers: ['B', 'C', 'V'] };
   for (let i = 2; i < argv.length; i++) {
     if (argv[i] === '--tiers') {
       out.tiers = argv[++i].split(',').map((s) => s.trim().toUpperCase());

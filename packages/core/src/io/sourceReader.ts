@@ -82,6 +82,32 @@ function isAllowedContentType(raw: string): boolean {
 
 const LOCALHOST_NAMES = new Set(['localhost', '::1', '0.0.0.0', '']);
 
+/**
+ * Throw if `hostname` is disallowed by the SSRF policy: allowlist takes
+ * priority (only matching hosts pass); otherwise the private-IP denylist
+ * applies. Shared by `readSource` (text) and `readImageSource` (image) so the
+ * two paths can never drift on this security check.
+ */
+export function assertHostAllowed(hostname: string, opts: ReadSourceOptions): void {
+  if (opts.allowedHosts && opts.allowedHosts.length > 0) {
+    const allowed = opts.allowedHosts.some(
+      (h) => hostname === h || hostname.endsWith('.' + h),
+    );
+    if (!allowed) {
+      throw new Error(
+        `Host "${hostname}" is not in the OMCP_URL_HOSTS allowlist ` +
+          `(${opts.allowedHosts.join(', ')}). Add the host to allow access.`,
+      );
+    }
+  } else if (opts.denyPrivate && isPrivateHost(hostname)) {
+    throw new Error(
+      `Access to private/loopback host "${hostname}" is blocked (SSRF protection). ` +
+        `Set OMCP_URL_DENY_PRIVATE=0 to disable (not recommended), or ` +
+        `use OMCP_URL_HOSTS to allowlist specific internal hosts.`,
+    );
+  }
+}
+
 function isPrivateHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
   if (LOCALHOST_NAMES.has(h)) return true;
@@ -97,6 +123,105 @@ function isPrivateHost(hostname: string): boolean {
     if (a === 0) return true;                              // 0.0.0.0/8
   }
   return false;
+}
+
+// ── Shared HTTP helpers (used by readSource AND imageReader) ───────────────────
+
+/**
+ * Fetch with the SSRF host policy enforced on EVERY hop, plus the request
+ * timeout. `redirect: 'manual'` so a 3xx can't transparently bounce the request
+ * to a private/internal host behind a public hostname — each Location is
+ * re-validated by `assertHostAllowed` before it is followed. Returns the final
+ * (non-redirect) Response; the caller checks `res.ok`.
+ */
+export async function safeFetch(
+  initialUrl: string,
+  opts: ReadSourceOptions,
+  init: { headers?: Record<string, string> } = {},
+  maxRedirects = 3,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs);
+  try {
+    let url = initialUrl;
+    for (let hop = 0; ; hop++) {
+      // Re-validate every hop's host — a redirect must not escape the policy.
+      assertHostAllowed(new URL(url).hostname, opts);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          signal: controller.signal,
+          redirect: 'manual',
+          ...(init.headers ? { headers: init.headers } : {}),
+        });
+      } catch (err) {
+        const isAbort = (err as Error).name === 'AbortError';
+        throw new Error(
+          isAbort
+            ? `Request timed out after ${opts.timeoutMs}ms: "${initialUrl}"`
+            : `Fetch failed: ${(err as Error).message}`,
+        );
+      }
+      const loc = res.headers.get('location');
+      if (res.status >= 300 && res.status < 400 && loc) {
+        // Release the intermediate redirect response's body. undici (Node fetch)
+        // keeps the socket/connection alive until the body is consumed or
+        // cancelled — not doing so on each hop leaks a connection per redirect.
+        await res.body?.cancel().catch(() => {});
+        if (hop >= maxRedirects) {
+          throw new Error(`Too many redirects (>${maxRedirects}) for "${initialUrl}"`);
+        }
+        url = new URL(loc, url).toString(); // resolve relative Location
+        continue;
+      }
+      return res;
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Read a fetch Response body into a Buffer with a hard byte cap: rejects via the
+ * Content-Length preflight when present, and STREAMS otherwise — cancelling at
+ * the cap so a body with no/lying Content-Length can't exhaust memory. Shared by
+ * the text and image readers so neither path can regress to an unbounded buffer.
+ */
+export async function readCappedBody(res: Response, maxBytes: number): Promise<Buffer> {
+  const clHeader = res.headers.get('content-length');
+  if (clHeader) {
+    const cl = parseInt(clHeader, 10);
+    if (!isNaN(cl) && cl > maxBytes) {
+      throw new Error(
+        `Content-Length ${cl} bytes exceeds limit ${maxBytes} bytes. ` +
+          `Set OMCP_URL_MAX_BYTES to raise the limit.`,
+      );
+    }
+  }
+  if (!res.body) throw new Error('Response body is null or not readable.');
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new Error(
+            `Response body exceeded size limit ${maxBytes} bytes. ` +
+              `Set OMCP_URL_MAX_BYTES to raise the limit.`,
+          );
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
 }
 
 // ── Core read function ────────────────────────────────────────────────────────
@@ -138,46 +263,10 @@ export async function readSource(
 
   // ── http(s):// ────────────────────────────────────────────────────────────
   if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-    const { hostname } = parsed;
-
-    // Host policy: allowlist takes priority; falls back to private-IP denylist
-    if (opts.allowedHosts && opts.allowedHosts.length > 0) {
-      const allowed = opts.allowedHosts.some(
-        (h) => hostname === h || hostname.endsWith('.' + h),
-      );
-      if (!allowed) {
-        throw new Error(
-          `Host "${hostname}" is not in the OMCP_URL_HOSTS allowlist ` +
-            `(${opts.allowedHosts.join(', ')}). Add the host to allow access.`,
-        );
-      }
-    } else if (opts.denyPrivate && isPrivateHost(hostname)) {
-      throw new Error(
-        `Access to private/loopback host "${hostname}" is blocked (SSRF protection). ` +
-          `Set OMCP_URL_DENY_PRIVATE=0 to disable (not recommended), or ` +
-          `use OMCP_URL_HOSTS to allowlist specific internal hosts.`,
-      );
-    }
-
-    // Fetch with timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs);
-    let res: Response;
-    try {
-      res = await fetch(parsed.toString(), {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'local-mcp-toolbelt/0.5.0' },
-      });
-    } catch (err) {
-      const isAbort = (err as Error).name === 'AbortError';
-      throw new Error(
-        isAbort
-          ? `Request timed out after ${opts.timeoutMs}ms: "${uri}"`
-          : `Fetch failed: ${(err as Error).message}`,
-      );
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    // Host policy + per-hop-revalidated redirects + timeout (SSRF-safe).
+    const res = await safeFetch(parsed.toString(), opts, {
+      headers: { 'User-Agent': 'local-mcp-toolbelt/0.5.0' },
+    });
 
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText}: "${uri}"`);
@@ -193,45 +282,9 @@ export async function readSource(
       );
     }
 
-    // Preflight size check via Content-Length header
-    const clHeader = res.headers.get('content-length');
-    if (clHeader) {
-      const cl = parseInt(clHeader, 10);
-      if (!isNaN(cl) && cl > opts.maxBytes) {
-        throw new Error(
-          `Content-Length ${cl} bytes exceeds limit ${opts.maxBytes} bytes. ` +
-            `Set OMCP_URL_MAX_BYTES to raise the limit.`,
-        );
-      }
-    }
-
-    // Stream body with hard byte cap
-    if (!res.body) throw new Error('Response body is null or not readable.');
-    const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          totalBytes += value.byteLength;
-          if (totalBytes > opts.maxBytes) {
-            await reader.cancel();
-            throw new Error(
-              `Response body exceeded size limit ${opts.maxBytes} bytes. ` +
-                `Set OMCP_URL_MAX_BYTES to raise the limit.`,
-            );
-          }
-          chunks.push(value);
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    const text = Buffer.concat(chunks).toString('utf-8');
-    return { text, bytes: totalBytes, contentType: rawCt };
+    // Stream body with hard byte cap (Content-Length preflight + mid-stream cancel).
+    const buf = await readCappedBody(res, opts.maxBytes);
+    return { text: buf.toString('utf-8'), bytes: buf.byteLength, contentType: rawCt };
   }
 
   // ── Unsupported scheme ────────────────────────────────────────────────────

@@ -525,3 +525,67 @@ describe('normalizeForStrictMode — recursion completeness (code-review E1-E3)'
     expect(input).toEqual(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multimodal (tier V) — image content + chat_template_kwargs suppression
+// ---------------------------------------------------------------------------
+
+describe('MlxHttpBackend — multimodal / chat_template (tier V)', () => {
+  const BASE_URL = 'http://127.0.0.1:8080';
+  const DATA_URI = 'data:image/png;base64,iVBORw0KGgo=';
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function capture(
+    opts: ConstructorParameters<typeof MlxHttpBackend>[0],
+    chatArgs: Parameters<MlxHttpBackend['chat']>[0],
+  ): Promise<{ messages: Array<{ role: string; content: unknown }>; chat_template_kwargs?: unknown }> {
+    const mockFetch = vi.fn().mockResolvedValue(makeOkResponse(chatResponse('{}')));
+    vi.stubGlobal('fetch', mockFetch);
+    const backend = new MlxHttpBackend(opts);
+    await backend.chat(chatArgs);
+    const init = (mockFetch.mock.calls[0] as [string, RequestInit])[1];
+    return JSON.parse(init.body as string);
+  }
+
+  it('chat_template mode: images → multimodal content array + chat_template_kwargs(enable_thinking:false)', async () => {
+    const body = await capture(
+      { baseUrl: BASE_URL, modelName: 'Qwen3-VL-4B-Instruct-4bit', thinkingMode: 'chat_template' },
+      { user: 'extract', images: [DATA_URI], maxInputTokens: 32768, disableThinking: true },
+    );
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: 'extract' }, // NO /no_think appended in chat_template mode
+      { type: 'image_url', image_url: { url: DATA_URI } },
+    ]);
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it('chat_template mode: disableThinking:false → enable_thinking:true', async () => {
+    const body = await capture(
+      { baseUrl: BASE_URL, modelName: 'Qwen3-VL-4B-Instruct-4bit', thinkingMode: 'chat_template' },
+      { user: 'hi', maxInputTokens: 32768, disableThinking: false },
+    );
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true });
+  });
+
+  it('default (no_think) mode: text-only request is byte-identical (string content, no chat_template_kwargs)', async () => {
+    const body = await capture(
+      { baseUrl: BASE_URL, modelName: 'test-model' },
+      { user: 'Say hello', maxInputTokens: 8192, disableThinking: true },
+    );
+    expect(body.messages[0].content).toBe('Say hello\n/no_think');
+    expect(body.chat_template_kwargs).toBeUndefined();
+  });
+
+  it('multiple images → one image_url part each, after the text part', async () => {
+    const body = await capture(
+      { baseUrl: BASE_URL, modelName: 'Qwen3-VL-4B-Instruct-4bit', thinkingMode: 'chat_template' },
+      { user: 'compare', images: [DATA_URI, DATA_URI], maxInputTokens: 32768, disableThinking: true },
+    );
+    expect(Array.isArray(body.messages[0].content)).toBe(true);
+    const content = body.messages[0].content as Array<{ type: string }>;
+    expect(content.map((c) => c.type)).toEqual(['text', 'image_url', 'image_url']);
+  });
+});

@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import {
   type BridgeConfig,
+  type Tier,
   DEFAULT_CONFIG,
   tierForTool,
   tierModelLabel,
@@ -12,6 +13,7 @@ import { buildFooter } from './footer.js';
 import { BridgeDefense } from './defense.js';
 import { sanitizeSchemaForStrictMode } from './sanitize.js';
 import { readSource, readSourceOptionsFromEnv } from '../io/sourceReader.js';
+import { readImageSource } from '../io/imageReader.js';
 import { backendForTool } from './backend-factory.js';
 import {
   resolveThinking,
@@ -186,10 +188,55 @@ const MAX_OUTPUT_TOKENS = {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function toolCallError(err: unknown) {
-  const msg = `Backend chat failed: ${(err as Error).message}`;
+  const raw = (err as Error)?.message ?? String(err);
+  // Translate oMLX's opaque prefill memory-guard rejection (input overflows the
+  // model context / KV memory) into an actionable message. Backstop for the
+  // proactive oversizeCheck() below when the char/3.5 token proxy under-estimates
+  // (e.g. CJK-dense input) — the sister flagged a ~2700-line file hitting this.
+  if (/prefill[_ ]memory|memory guard/i.test(raw)) {
+    return {
+      isError: true as const,
+      content: [{ type: 'text' as const, text:
+        `Input too large for the local model's context/memory — oMLX's prefill memory guard rejected it. ` +
+        `For long documents use \`summarize-long-chunked\` (map-reduce; needs a client with a >60 s timeout, ` +
+        `or the async-job path via \`enqueue_job\`); otherwise split the input, or raise oMLX's ` +
+        `memory_guard_tier (safe → balanced → aggressive) in ~/.omlx/settings.json.\n\n(engine: ${raw})` }],
+    };
+  }
   return {
     isError: true as const,
-    content: [{ type: 'text' as const, text: msg }],
+    content: [{ type: 'text' as const, text: `Backend chat failed: ${raw}` }],
+  };
+}
+
+/**
+ * Proactive size guard: reject an input that can't fit the tier's context
+ * BEFORE sending it (so the caller gets an actionable message instead of the
+ * opaque oMLX prefill_memory_exceeded 400 — sister bug report 2026-06-17).
+ *
+ * Uses the same `ceil(chars / 3.5)` token proxy as MlxHttpBackend.countTokens
+ * and a 0.85 safety factor (matching the chunker) so the limit sits below where
+ * the engine's memory guard trips. Returns an error result, or null to proceed.
+ */
+function oversizeCheck(
+  text: string,
+  numCtx: number,
+  outputReserve: number,
+  tierKey: Tier,
+  opts: { chunked?: boolean } = {},
+): { isError: true; content: Array<{ type: 'text'; text: string }> } | null {
+  const estTokens = Math.ceil(text.length / 3.5);
+  const limit = Math.floor(numCtx * 0.85) - outputReserve;
+  if (estTokens <= limit) return null;
+  const hint = opts.chunked
+    ? 'Use `summarize-long-chunked` (map-reduce — needs a client with a >60 s timeout, or the async-job path via `enqueue_job`). '
+    : 'Split the input into smaller pieces. ';
+  return {
+    isError: true as const,
+    content: [{ type: 'text' as const, text:
+      `Input too large for Tier ${tierKey}: ~${estTokens} estimated tokens exceeds the safe single-call ` +
+      `limit (~${limit}; model context ${numCtx}). ${hint}` +
+      `Alternatively raise oMLX's memory_guard_tier (safe → balanced → aggressive) in ~/.omlx/settings.json.` }],
   };
 }
 
@@ -238,18 +285,51 @@ async function sendProgress(
 
 // ── Source resolution helper (F2) ────────────────────────────────────────────
 
+/** Routing knob for image-vs-text source resolution. */
+export type Modality = 'auto' | 'image' | 'text';
+
+/** Zod input schema fragment for the per-tool `modality` knob. */
+const ModalityInputSchema = z
+  .enum(['auto', 'image', 'text'])
+  .optional()
+  .describe(
+    "How to treat source_uri: 'auto' (default) sniffs by file extension " +
+      "(.png/.jpg/.jpeg/.webp → image, else text); 'image' forces the vision " +
+      "(VLM) tier; 'text' forces text. Inline `text` is always treated as text.",
+  );
+
 type SourceResolved =
-  | { ok: true; text: string; bytes?: number }
+  | { ok: true; kind: 'text'; text: string; bytes?: number }
+  | {
+      ok: true;
+      kind: 'image';
+      dataUri: string;
+      mimeType: string;
+      bytes: number;
+      originalBytes: number;
+      downscaled: boolean;
+    }
   | { ok: false; message: string };
+
+/** Heuristic: does this source_uri look like an image by its path extension? */
+function looksLikeImageUri(uri: string): boolean {
+  return /\.(png|jpe?g|webp)(?:[?#].*)?$/i.test(uri);
+}
 
 /**
  * Resolve the caller's source input: either `text` (inline) or `source_uri`
  * (file/URL). Exactly one must be provided. Returns a discriminated union so
  * the handler can short-circuit on failure without throwing.
+ *
+ * `modality` decides text vs image for a `source_uri` (inline `text` is always
+ * text): 'image' forces the image path (VLM), 'text' forces text, 'auto'
+ * (default) sniffs by extension. The image path fetches + downscales the image
+ * and returns a bounded base64 data URI; raw image bytes never reach frontier.
  */
 async function resolveSource(
   text: string | undefined,
   sourceUri: string | undefined,
+  modality: Modality = 'auto',
 ): Promise<SourceResolved> {
   if (!text && !sourceUri) {
     return { ok: false, message: 'Either text or source_uri must be provided.' };
@@ -258,15 +338,29 @@ async function resolveSource(
     return { ok: false, message: 'Provide either text or source_uri, not both.' };
   }
   if (sourceUri) {
+    const wantImage =
+      modality === 'image' || (modality === 'auto' && looksLikeImageUri(sourceUri));
     try {
       const opts = readSourceOptionsFromEnv();
+      if (wantImage) {
+        const img = await readImageSource(sourceUri, opts);
+        return {
+          ok: true,
+          kind: 'image',
+          dataUri: img.dataUri,
+          mimeType: img.mimeType,
+          bytes: img.bytes,
+          originalBytes: img.originalBytes,
+          downscaled: img.downscaled,
+        };
+      }
       const r = await readSource(sourceUri, opts);
-      return { ok: true, text: r.text, bytes: r.bytes };
+      return { ok: true, kind: 'text', text: r.text, bytes: r.bytes };
     } catch (err) {
       return { ok: false, message: `source_uri read failed: ${(err as Error).message}` };
     }
   }
-  return { ok: true, text: text! };
+  return { ok: true, kind: 'text', text: text! };
 }
 
 // ── Server builder ──────────────────────────────────────────────────────────
@@ -327,16 +421,60 @@ export function buildBridgeServer(
         style: z.string().optional().describe(
           'Optional style hint, e.g. "one sentence", "three bullet points", "for a non-technical reader".',
         ),
+        modality: ModalityInputSchema,
         thinking: ThinkingInputSchema,
       },
     },
-    async ({ text, source_uri, style, thinking }, extra: ToolExtra) => {
-      const src = await resolveSource(text, source_uri);
+    async ({ text, source_uri, style, modality, thinking }, extra: ToolExtra) => {
+      const src = await resolveSource(text, source_uri, modality);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
       }
+      if (src.kind === 'image') {
+        // IMAGE path → tier V (VLM). No text defender (no text to scan).
+        const vKey: Tier = 'V';
+        const vCfg = config.tiers[vKey];
+        const ti = Date.now();
+        await sendProgress(extra, 1, 2, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
+        try {
+          const vBackend = backendForTool(config, 'summarize', vKey);
+          const vUser = style
+            ? `Summarize the attached image. Style: ${style}.`
+            : 'Summarize the attached image — what it shows and its key content.';
+          const vres = await vBackend.chat(
+            {
+              system: SUMMARIZE_SYSTEM,
+              user: vUser,
+              images: [src.dataUri],
+              temperature: 0.2,
+              maxInputTokens: vCfg.numCtx ?? 32768,
+              maxOutputTokens: MAX_OUTPUT_TOKENS.summarize,
+              disableThinking: resolveThinking('summarize', thinking) === 'off',
+            },
+            extra.signal,
+          );
+          const vLatency = Date.now() - ti;
+          const vFooter = buildFooter({ model: tierModelLabel(vCfg), tier: vKey, latencyMs: vLatency, promptTokens: vres.promptTokens, completionTokens: vres.completionTokens });
+          const vMeta = buildMeta({ model: tierModelLabel(vCfg), tier: vKey, latencyMs: vLatency, result: vres });
+          vMeta['dev.localmcptoolbelt/source_uri'] = source_uri;
+          vMeta['dev.localmcptoolbelt/source_bytes'] = src.bytes;
+          vMeta['dev.localmcptoolbelt/image_mime'] = src.mimeType;
+          vMeta['dev.localmcptoolbelt/image_downscaled'] = src.downscaled;
+          return {
+            content: [
+              { type: 'text' as const, text: vres.text.trim() },
+              ...(vFooter ? [{ type: 'text' as const, text: vFooter }] : []),
+            ],
+            _meta: vMeta,
+          };
+        } catch (err) {
+          return toolCallError(err);
+        }
+      }
       const tierKey = tierForTool(config, 'summarize');
       const tierCfg = config.tiers[tierKey];
+      const sizeErr = oversizeCheck(src.text, tierCfg.numCtx ?? 8192, MAX_OUTPUT_TOKENS.summarize, tierKey, { chunked: true });
+      if (sizeErr) return sizeErr;
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierModelLabel(tierCfg)})`);
       try {
@@ -423,8 +561,16 @@ export function buildBridgeServer(
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
       }
+      if (src.kind === 'image') {
+        return {
+          isError: true as const,
+          content: [{ type: 'text' as const, text: 'summarize-long is text-only (long-context tier C). For images use the VLM path on `extract`.' }],
+        };
+      }
       const tierKey = tierForTool(config, 'summarize-long');
       const tierCfg = config.tiers[tierKey];
+      const sizeErr = oversizeCheck(src.text, tierCfg.numCtx ?? 8192, MAX_OUTPUT_TOKENS['summarize-long'], tierKey, { chunked: true });
+      if (sizeErr) return sizeErr;
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierModelLabel(tierCfg)})`);
       try {
@@ -510,6 +656,12 @@ export function buildBridgeServer(
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
+      if (src.kind === 'image') {
+        return {
+          isError: true as const,
+          content: [{ type: 'text' as const, text: 'summarize-long-chunked is text-only (map-reduce over long text). For images use the VLM path on `extract`.' }],
+        };
       }
       const tierKey = tierForTool(config, 'summarize-long-chunked');
       const tierCfg = config.tiers[tierKey];
@@ -622,10 +774,15 @@ export function buildBridgeServer(
         'enum-typed labeling task. ' +
         'VALUE: reliability, not token savings. Grammar-constrained output guarantees every ' +
         'response is a valid member of your categories — something small local models cannot ' +
-        'reliably self-enforce. Data stays local. This tool does not accept source_uri because ' +
-        'classification inputs are typically already short and in your context.',
+        'reliably self-enforce. Data stays local. Accepts inline `text` (typical — classify inputs ' +
+        'are usually short and already in your context) OR a `source_uri` to an IMAGE (png/jpg/webp) ' +
+        'to classify visually via the local VLM tier (raw image bytes never enter your context).',
       inputSchema: {
-        text: z.string().min(1).describe('The text to classify.'),
+        text: z.string().min(1).optional().describe('The text to classify. Required if source_uri is not provided.'),
+        source_uri: z.string().min(1).optional().describe(
+          'URI to an IMAGE to classify (file:// or http(s)://, png/jpg/webp). Routes to the local VLM tier. ' +
+          'Use modality to force image/text; defaults to sniff-by-extension.',
+        ),
         categories: z.array(z.string()).min(2).describe(
           'Exhaustive list of valid labels. The model will pick only from this list.',
         ),
@@ -635,20 +792,75 @@ export function buildBridgeServer(
         explain: z.boolean().optional().describe(
           'If true, include a short reason field in the output.',
         ),
+        modality: ModalityInputSchema,
         thinking: ThinkingInputSchema,
       },
     },
-    async ({ text, categories, allow_multiple, explain, thinking }, extra: ToolExtra) => {
+    async ({ text, source_uri, categories, allow_multiple, explain, modality, thinking }, extra: ToolExtra) => {
+      const src = await resolveSource(text, source_uri, modality);
+      if (!src.ok) {
+        return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
+      // Grammar-constrained label schema — shared by text and image paths.
+      const labelEnum = categories as [string, ...string[]];
+      const labelsSchema = allow_multiple
+        ? { type: 'array', items: { enum: labelEnum }, minItems: 1 }
+        : { type: 'array', items: { enum: labelEnum }, minItems: 1, maxItems: 1 };
+      const formatSchema = explain
+        ? { type: 'object', properties: { labels: labelsSchema, reason: { type: 'string' } }, required: ['labels', 'reason'] }
+        : { type: 'object', properties: { labels: labelsSchema }, required: ['labels'] };
+
+      if (src.kind === 'image') {
+        // IMAGE path → tier V (VLM). No text defender (no text to scan).
+        const vKey: Tier = 'V';
+        const vCfg = config.tiers[vKey];
+        const ti = Date.now();
+        await sendProgress(extra, 1, 2, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
+        try {
+          const vBackend = backendForTool(config, 'classify', vKey);
+          const vres = await vBackend.chat(
+            {
+              system: CLASSIFY_SYSTEM,
+              user: 'Classify the attached image into the provided categories.',
+              images: [src.dataUri],
+              temperature: 0.1,
+              maxInputTokens: vCfg.numCtx ?? 32768,
+              format: formatSchema,
+              maxOutputTokens: MAX_OUTPUT_TOKENS.classify,
+              disableThinking: resolveThinking('classify', thinking) === 'off',
+            },
+            extra.signal,
+          );
+          const vLatency = Date.now() - ti;
+          const vFooter = buildFooter({ model: tierModelLabel(vCfg), tier: vKey, latencyMs: vLatency, promptTokens: vres.promptTokens, completionTokens: vres.completionTokens });
+          const vMeta = buildMeta({ model: tierModelLabel(vCfg), tier: vKey, latencyMs: vLatency, result: vres });
+          vMeta['dev.localmcptoolbelt/source_uri'] = source_uri;
+          vMeta['dev.localmcptoolbelt/source_bytes'] = src.bytes;
+          vMeta['dev.localmcptoolbelt/image_mime'] = src.mimeType;
+          vMeta['dev.localmcptoolbelt/image_downscaled'] = src.downscaled;
+          return {
+            content: [
+              { type: 'text' as const, text: vres.text },
+              ...(vFooter ? [{ type: 'text' as const, text: vFooter }] : []),
+            ],
+            _meta: vMeta,
+          };
+        } catch (err) {
+          return toolCallError(err);
+        }
+      }
+
+      const inputText = src.text;
       const tierKey = tierForTool(config, 'classify');
       const tierCfg = config.tiers[tierKey];
       const t0 = Date.now();
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierModelLabel(tierCfg)})`);
       try {
-        let safeText = text;
+        let safeText = inputText;
         let systemPrompt = CLASSIFY_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
         if (defense) {
-          const dResult = await defense.defend(text, 'classify');
+          const dResult = await defense.defend(inputText, 'classify');
           defenderMeta = { tier: dResult.defenderTier, score: dResult.score, risk: dResult.risk };
           await sendProgress(extra, 1, 3, `defender passed (risk=${dResult.risk ?? 'low'})`);
           if (!dResult.allowed) {
@@ -661,15 +873,6 @@ export function buildBridgeServer(
           safeText = dResult.wrappedText;
           systemPrompt = dResult.systemPrefix + '\n\n' + CLASSIFY_SYSTEM;
         }
-        // Build grammar-constrained schema: labels must be members of categories
-        const labelEnum = categories as [string, ...string[]];
-        const labelsSchema = allow_multiple
-          ? { type: 'array', items: { enum: labelEnum }, minItems: 1 }
-          : { type: 'array', items: { enum: labelEnum }, minItems: 1, maxItems: 1 };
-        const formatSchema = explain
-          ? { type: 'object', properties: { labels: labelsSchema, reason: { type: 'string' } }, required: ['labels', 'reason'] }
-          : { type: 'object', properties: { labels: labelsSchema }, required: ['labels'] };
-
         await sendProgress(extra, 2, 3, 'generating…');
         const backend = backendForTool(config, 'classify');
         const result = await backend.chat(
@@ -729,11 +932,12 @@ export function buildBridgeServer(
           'JSON Schema object describing the desired output. Obtain via z.toJSONSchema(yourSchema). ' +
           'Avoid z.email(), z.url(), z.string().regex() — they are rejected by the local model\'s strict json_schema mode.',
         ),
+        modality: ModalityInputSchema,
         thinking: ThinkingInputSchema,
       },
     },
-    async ({ text, source_uri, schema, thinking }, extra: ToolExtra) => {
-      const src = await resolveSource(text, source_uri);
+    async ({ text, source_uri, schema, modality, thinking }, extra: ToolExtra) => {
+      const src = await resolveSource(text, source_uri, modality);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
       }
@@ -752,6 +956,61 @@ export function buildBridgeServer(
           };
         }
 
+        // ── IMAGE path → tier V (Qwen3-VL). Self-contained early return; the
+        // text path below is untouched. No text defender runs (there is no text
+        // to scan — image-borne prompt injection is out of v0.8.0 scope). Schema
+        // sanitation above is shared.
+        if (src.kind === 'image') {
+          const vKey: Tier = 'V';
+          const vCfg = config.tiers[vKey];
+          await sendProgress(extra, 2, 3, `image → Tier ${vKey} (${tierModelLabel(vCfg)})…`);
+          const vBackend = backendForTool(config, 'extract', vKey);
+          const vres = await vBackend.chat(
+            {
+              system: EXTRACT_SYSTEM,
+              user:
+                'Extract structured data from the attached image as JSON matching the schema. ' +
+                'Transcribe text — including CJK — verbatim.',
+              images: [src.dataUri],
+              temperature: 0.2,
+              maxInputTokens: vCfg.numCtx ?? 32768,
+              format: sanitized.schema,
+              maxOutputTokens: MAX_OUTPUT_TOKENS.extract,
+              disableThinking: resolveThinking('extract', thinking) === 'off',
+            },
+            extra.signal,
+          );
+          const vLatency = Date.now() - t0;
+          const vFooter = buildFooter({
+            model: tierModelLabel(vCfg),
+            tier: vKey,
+            latencyMs: vLatency,
+            promptTokens: vres.promptTokens,
+            completionTokens: vres.completionTokens,
+          });
+          const vMeta = buildMeta({
+            model: tierModelLabel(vCfg),
+            tier: vKey,
+            latencyMs: vLatency,
+            result: vres,
+            schemaValidation: 'passed',
+            schemaStripped: sanitized.stripped,
+          });
+          vMeta['dev.localmcptoolbelt/source_uri'] = source_uri;
+          vMeta['dev.localmcptoolbelt/source_bytes'] = src.bytes;
+          vMeta['dev.localmcptoolbelt/image_mime'] = src.mimeType;
+          vMeta['dev.localmcptoolbelt/image_downscaled'] = src.downscaled;
+          return {
+            content: [
+              { type: 'text' as const, text: vres.text },
+              ...(vFooter ? [{ type: 'text' as const, text: vFooter }] : []),
+            ],
+            _meta: vMeta,
+          };
+        }
+
+        const sizeErr = oversizeCheck(src.text, tierCfg.numCtx ?? 8192, MAX_OUTPUT_TOKENS.extract, tierKey);
+        if (sizeErr) return sizeErr;
         let safeText = src.text;
         let systemPrompt = EXTRACT_SYSTEM;
         let defenderMeta: Parameters<typeof buildMeta>[0]['defender'];
@@ -844,6 +1103,12 @@ export function buildBridgeServer(
       const src = await resolveSource(text, source_uri);
       if (!src.ok) {
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
+      }
+      if (src.kind === 'image') {
+        return {
+          isError: true as const,
+          content: [{ type: 'text' as const, text: 'transform does not accept an image source_uri. For structured image extraction use `extract` with an image source_uri.' }],
+        };
       }
       const tierKey = tierForTool(config, 'transform');
       const tierCfg = config.tiers[tierKey];
@@ -938,6 +1203,12 @@ export function buildBridgeServer(
         return { isError: true as const, content: [{ type: 'text' as const, text: src.message }] };
       }
 
+      if (src.kind === 'image') {
+        return {
+          isError: true as const,
+          content: [{ type: 'text' as const, text: 'diff-semantic-index is text-only. Image input is not supported.' }],
+        };
+      }
       const diffText = src.text;
 
       // Token-budget guard: Tier B has num_ctx=8192; leave ~2K for output.

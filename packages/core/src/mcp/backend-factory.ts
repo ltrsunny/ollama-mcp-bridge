@@ -17,7 +17,7 @@
 
 import type { LlmBackend } from '../llm/backend.js';
 import { MlxHttpBackend } from '../llm/mlx-http-backend.js';
-import { type BridgeConfig, tierForTool } from '../config/tiers.js';
+import { type BridgeConfig, type Tier, tierForTool } from '../config/tiers.js';
 
 /**
  * Process-wide cache of MlxHttpBackend instances, keyed by
@@ -29,6 +29,13 @@ const mlxHttpCache = new Map<string, MlxHttpBackend>();
 export function backendForTool(
   config: BridgeConfig,
   toolName: string,
+  /**
+   * Force a specific tier, bypassing the per-tool map. Used by the
+   * image-bearing call path: an `extract`/`classify`/`summarize` invocation
+   * carrying an image routes to tier V (the VLM) regardless of the tool's
+   * default text tier. Absent → normal `tierForTool` resolution.
+   */
+  tierOverride?: Tier,
 ): LlmBackend {
   // Test injection: when a wildcard backend is installed, return it for any
   // tier. Lets snapshot/integration tests capture all chat() calls without
@@ -36,8 +43,21 @@ export function backendForTool(
   const testBackend = _getTestBackend();
   if (testBackend !== undefined) return testBackend;
 
-  const tier = tierForTool(config, toolName);
+  const tier = tierOverride ?? tierForTool(config, toolName);
   const tcfg = config.tiers[tier];
+
+  // A custom BridgeConfig may omit a tier (e.g. a text-only config without
+  // tier V); an image call forcing tierOverride='V' would otherwise deref
+  // `undefined.mlxUrl` and crash the handler with a raw TypeError. Fail clean.
+  if (tcfg === undefined) {
+    throw new Error(
+      `Tier ${tier} is not configured (toolName: ${toolName}). ` +
+        `Add a tiers.${tier} entry to your BridgeConfig` +
+        (tier === 'V'
+          ? ' — tier V (Qwen3-VL) is required for image/multimodal calls.'
+          : '.'),
+    );
+  }
 
   if (tcfg.mlxUrl === undefined) {
     throw new Error(
@@ -48,13 +68,19 @@ export function backendForTool(
     );
   }
 
-  const cacheKey = `${tcfg.mlxUrl}::${tcfg.mlxModelName ?? 'auto'}`;
+  // Include thinkingMode in the key: two tiers can share (url, model) yet differ
+  // in suppression mechanism (/no_think vs chat_template_kwargs). Omitting it
+  // would hand one tier the other's backend → wrong thinking suppression.
+  const cacheKey = `${tcfg.mlxUrl}::${tcfg.mlxModelName ?? 'auto'}::${tcfg.thinkingMode ?? 'no_think'}`;
   let cached = mlxHttpCache.get(cacheKey);
   if (cached === undefined) {
     cached = new MlxHttpBackend({
       baseUrl: tcfg.mlxUrl,
       numCtx: tcfg.numCtx,
       modelName: tcfg.mlxModelName,
+      ...(tcfg.thinkingMode !== undefined
+        ? { thinkingMode: tcfg.thinkingMode }
+        : {}),
     });
     mlxHttpCache.set(cacheKey, cached);
   }

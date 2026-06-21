@@ -73,8 +73,14 @@
 #      can't always deliver from a 4B model.
 #
 #   3. Project-internal data files by extension
-#      Default extensions: log diff jsonl ips ndjson csv
+#      Default extensions: log diff jsonl ips ndjson csv png jpg jpeg webp
 #      Threshold: same as band 2.
+#      Images (png/jpg/jpeg/webp) route to the multimodal bridge tools
+#      (extract/classify/summarize with an image source_uri → local VLM tier;
+#      raw image bytes never enter frontier). NB: a genuine *visual-fidelity*
+#      read (you need to SEE the image to reason about layout) is the one case
+#      the bridge's structured digest can't substitute — drop image extensions
+#      via OMCP_HOOK_DATA_EXTENSIONS, or use the edit-marker, for that.
 #
 # Agent task-output exemption: paths matching the agent's own task-scratch
 # pattern are exempt from all bands. These are working scratch I/O for the
@@ -111,7 +117,7 @@ ANALYSIS_THRESHOLD="${OMCP_HOOK_ANALYSIS_THRESHOLD_BYTES:-4096}"
 DEFAULT_ANALYSIS_PATHS=".claude/brainstorm:.claude/diagnostics:docs/notes:docs/scope-memos:docs/prior-art"
 ANALYSIS_PATHS_RAW="${OMCP_HOOK_ANALYSIS_PATHS:-$DEFAULT_ANALYSIS_PATHS}"
 
-DEFAULT_DATA_EXTS="log diff jsonl ips ndjson csv"
+DEFAULT_DATA_EXTS="log diff jsonl ips ndjson csv png jpg jpeg webp"
 DATA_EXTS_RAW="${OMCP_HOOK_DATA_EXTENSIONS:-$DEFAULT_DATA_EXTS}"
 
 EXTRA_ALLOWED_RAW="${OMCP_HOOK_EXTRA_ALLOWED_PREFIXES:-}"

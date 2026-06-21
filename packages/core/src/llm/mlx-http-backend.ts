@@ -49,6 +49,17 @@ export interface MlxHttpBackendOptions {
    */
   modelName?: string;
   /**
+   * Thinking-trace suppression mechanism for this backend's model.
+   *
+   * - `'no_think'` (default): append `/no_think` to the user prompt (Qwen3
+   *   thinking models honor it; inert on non-thinking models).
+   * - `'chat_template'`: send `chat_template_kwargs: { enable_thinking: false }`
+   *   and leave the prompt untouched. Required for Qwen3-VL / Qwen3.5.
+   *
+   * Default preserves the exact B/C/D request shape (migration-snapshot contract).
+   */
+  thinkingMode?: 'no_think' | 'chat_template';
+  /**
    * @internal Override the circuit-breaker total wait budget (default 5000 ms).
    * Used by tests to keep the "never recovers" path under vitest's 5s timeout.
    */
@@ -59,12 +70,27 @@ export interface MlxHttpBackendOptions {
   _restartPollIntervalMs?: number;
 }
 
+/**
+ * OpenAI-compatible content parts for multimodal (VLM) messages. A message's
+ * `content` is either a plain string (text-only — the B/C/D path, unchanged)
+ * or an array of these parts (the tier-V image path).
+ */
+type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 /** Shape of the OpenAI-compatible request sent to the bridge server. */
 interface OpenAIChatRequest {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string | ChatContentPart[] }>;
   max_tokens?: number;
   temperature?: number;
+  /**
+   * Qwen3-VL / Qwen3.5 thinking suppression. oMLX forwards this to the chat
+   * template; `{ enable_thinking: false }` disables the reasoning trace where
+   * `/no_think` has no effect. Only emitted when `thinkingMode === 'chat_template'`.
+   */
+  chat_template_kwargs?: { enable_thinking: boolean };
   response_format?:
     | { type: 'text' | 'json_object' }
     | {
@@ -208,11 +234,13 @@ export class MlxHttpBackend implements LlmBackend {
   private resolvedModelName?: string;
   private readonly restartPollBudgetMs: number;
   private readonly restartPollIntervalMs: number;
+  private readonly thinkingMode: 'no_think' | 'chat_template';
 
   constructor(opts: MlxHttpBackendOptions) {
     // Normalise: strip trailing slash once so every endpoint path is clean.
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this.configuredModelName = opts.modelName;
+    this.thinkingMode = opts.thinkingMode ?? 'no_think';
     this.restartPollBudgetMs =
       opts._restartPollBudgetMs ?? MlxHttpBackend.RESTART_POLL_BUDGET_MS;
     this.restartPollIntervalMs =
@@ -327,7 +355,7 @@ export class MlxHttpBackend implements LlmBackend {
       throw new Error('MlxHttpBackend: aborted before fetch');
     }
 
-    const messages: Array<{ role: string; content: string }> = [];
+    const messages: Array<{ role: string; content: string | ChatContentPart[] }> = [];
     if (opts.system !== undefined) {
       messages.push({ role: 'system', content: opts.system });
     }
@@ -354,7 +382,30 @@ export class MlxHttpBackend implements LlmBackend {
     } else {
       thinkingOn = process.env['OMCP_THINKING_MODE'] === 'on';
     }
-    const userContent = thinkingOn ? opts.user : `${opts.user}\n/no_think`;
+
+    // `/no_think` is only appended in the 'no_think' tier mode. In
+    // 'chat_template' mode (tier V — Qwen3-VL) the prompt is left untouched and
+    // thinking is disabled via `chat_template_kwargs` on the body below, because
+    // Qwen3-VL's chat template ignores the `/no_think` token.
+    const userText =
+      this.thinkingMode === 'no_think' && !thinkingOn
+        ? `${opts.user}\n/no_think`
+        : opts.user;
+
+    // Text-only calls send a plain string (B/C/D contract unchanged). When
+    // images are attached (tier V), send a multimodal content array: one text
+    // part + one `image_url` part per data-URI image. Images are fetched +
+    // downscaled upstream by the source_uri resolver, so raw bytes never touch
+    // the frontier.
+    const userContent: string | ChatContentPart[] =
+      opts.images && opts.images.length > 0
+        ? [
+            { type: 'text', text: userText },
+            ...opts.images.map(
+              (url): ChatContentPart => ({ type: 'image_url', image_url: { url } }),
+            ),
+          ]
+        : userText;
     messages.push({ role: 'user', content: userContent });
 
     const modelName = await this.resolveModelName();
@@ -363,6 +414,12 @@ export class MlxHttpBackend implements LlmBackend {
       model: modelName,
       messages,
       temperature: opts.temperature ?? 0,
+      // Tier-V (Qwen3-VL) thinking suppression — emitted only in chat_template
+      // mode so the B/C/D request shape (migration-snapshot contract) is byte-
+      // identical to before.
+      ...(this.thinkingMode === 'chat_template'
+        ? { chat_template_kwargs: { enable_thinking: thinkingOn } }
+        : {}),
       ...(opts.maxOutputTokens !== undefined
         ? { max_tokens: opts.maxOutputTokens }
         : {}),
