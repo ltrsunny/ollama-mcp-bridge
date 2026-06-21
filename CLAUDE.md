@@ -27,6 +27,11 @@ Version + change history → `CHANGELOG.md` / `package.json`.
 
 All tools accept `source_uri` (file:// or http(s)://) — preferred over
 inline `text` because raw bytes never enter the frontier context.
+**Multimodal (v0.8.0, branch `feat/multimodal-vlm-tier`):** `extract` /
+`classify` / `summarize` also accept an IMAGE `source_uri` (png/jpg/webp) +
+a `modality` (`auto`|`image`|`text`) knob → routed to the VLM tier V; image
+bytes are fetched + downscaled locally and never enter frontier. The other
+tools guard-reject images.
 
 ## Tier system (all oMLX)
 
@@ -34,14 +39,20 @@ inline `text` because raw bytes never enter the frontier context.
 |---|---|---|---|
 | B | Qwen3-4B-Instruct-2507-4bit | 8192 | ✅ default — short tasks |
 | C | Qwen3-8B-4bit | 32768 | ✅ long-form summarize |
+| V | Qwen3-VL-4B-Instruct-4bit | 32768 | ✅ default (v0.8.0) — image calls; `chat_template_kwargs` thinking-suppression (dedicated Qwen3-VL line, NOT the unified Qwen3.5) |
 
 Tier D (`Qwen3-14B-4bit`) is **opt-in only** — 4-bit 14B (~7-8 GB) +
 6 GB hot_cache → OOM-prone on 16 GB Mac. Enable via
 `toolTierMap` + `npm run download-models -- --tiers B,C,D`.
+Tier V routes per-call (image-bearing calls), not via `toolTierMap`. On 16 GB
+oMLX is one-hot — a text↔image session pays cold-load swaps + the prefill
+memory guard can reject an image under accumulated pressure (sticky/batch
+mitigations; consolidation deferred Phase 2). See
+`docs/scope-memos/v0.8.0-multimodal-2026-06-16.md`.
 
 Single backend = `MlxHttpBackend` against `http://127.0.0.1:8000` (oMLX).
 Start:  `brew services start jundot/omlx/omlx`. Weights: `npm run
-download-models` (B+C by default). oMLX `json_schema` strict mode
+download-models` (B+C+V by default since v0.8.0; `--tiers B,C` for text-only). oMLX `json_schema` strict mode
 replaces llama.cpp's GBNF; enum + required enforced at decode.
 `summarize-long`+`extract` stay on B/C — long prefill+decode hit
 Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
