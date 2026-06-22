@@ -44,6 +44,11 @@ never enter frontier context (the largest per-call frontier saving of any tool).
   success. This funnels through the one shared `chat` path, so it protects every
   tool (summarize/extract/classify/transform) from silently corrupting downstream
   output. (Observed deterministically on a ~9.9 K-token `summarize-long` input.)
+- **`summarize-long` RECOVERS from a memory-guard rejection instead of erroring** — when its single
+  Tier-C call returns empty (the pressure-dependent oMLX prefill guard, NOT a fixed size ceiling), it
+  transparently falls back to the chunked map-reduce path (smaller per-chunk prefills fit under the
+  guard) and returns the summary. An error to the caller is still a failure; genuinely huge inputs that
+  even chunking can't fit in the 60 s wall still surface (use the async-job path via `enqueue_job`).
 - **SSRF via HTTP redirects** — `safeFetch` re-validates every redirect hop's
   host (`redirect: 'manual'`, ≤3 hops, intermediate bodies cancelled); shared by
   the text and image source readers.

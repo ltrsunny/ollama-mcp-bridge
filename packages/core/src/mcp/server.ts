@@ -609,17 +609,42 @@ export function buildBridgeServer(
         await sendProgress(extra, 2, 3, 'generating…');
         const user = style ? `Style override: ${style}\n\nSource:\n${safeText}` : `Source:\n${safeText}`;
         const backend = backendForTool(config, 'summarize-long');
-        const result = await backend.chat(
-          {
-            system: systemPrompt,
-            user,
-            temperature: 0.2,
-            maxInputTokens: tierCfg.numCtx ?? 8192,
-            maxOutputTokens: MAX_OUTPUT_TOKENS['summarize-long'],
-            disableThinking: resolveThinking('summarize-long', thinking) === 'off',
-          },
-          extra.signal,
-        );
+        let result = await backend
+          .chat(
+            {
+              system: systemPrompt,
+              user,
+              temperature: 0.2,
+              maxInputTokens: tierCfg.numCtx ?? 8192,
+              maxOutputTokens: MAX_OUTPUT_TOKENS['summarize-long'],
+              disableThinking: resolveThinking('summarize-long', thinking) === 'off',
+            },
+            extra.signal,
+          )
+          .catch(async (err: unknown) => {
+            // The single Tier-C call hit the oMLX prefill memory guard / returned an
+            // empty completion. This is PRESSURE-dependent on a one-hot 16 GB box, not a
+            // fixed size ceiling — and an error here is still a failure to the caller
+            // (an error IS a bug). So instead of surfacing it, TRANSPARENTLY fall back to
+            // the chunked map-reduce path: smaller per-chunk prefills fit under the guard,
+            // so the summary actually succeeds. (Genuinely huge inputs may still exceed the
+            // 60 s wall while chunking — that surfaces — but pressure rejections recover here.)
+            const msg = (err as Error)?.message ?? '';
+            const recoverable = /EMPTY completion|memory[ -]?guard|prefill|exceeds? .*(limit|context)/i.test(msg);
+            if (!recoverable || extra.signal?.aborted) throw err;
+            await sendProgress(extra, 2, 3, 'single call hit the memory guard — falling back to chunked map-reduce…');
+            return chunkedSummarize({
+              source: src.text,
+              style,
+              backend,
+              maxInputTokens: tierCfg.numCtx ?? 8192,
+              signal: extra.signal,
+              chunkSize: parseEnvInt('OMCP_CHUNK_SIZE'),
+              chunkOverlap: parseEnvInt('OMCP_CHUNK_OVERLAP'),
+              disableThinking: resolveThinking('summarize-long', thinking) === 'off',
+              concurrency: parseEnvInt('OMCP_CHUNK_CONCURRENCY'),
+            });
+          });
         const latencyMs = Date.now() - t0;
         const savedInputTokensEstimate = src.bytes !== undefined
           ? Math.max(0, Math.floor(src.bytes / 4) - result.completionTokens)
