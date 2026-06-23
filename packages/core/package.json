@@ -32,6 +32,7 @@
     "download-models": "node scripts/download-models.mjs",
     "install-aliases": "node bin/install-aliases.mjs",
     "smoke:cross-client": "node scripts/cross-client-smoke.mjs",
+    "sync:plugin": "npm run build && node scripts/sync-plugin-cache.mjs",
     "prepublishOnly": "npm run build && npm test && node tests/check-version-sync.mjs"
   },
   "engines": {
