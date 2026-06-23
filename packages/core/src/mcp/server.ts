@@ -21,6 +21,7 @@ import {
   type ThinkingMode,
 } from '../config/thinking-defaults.js';
 import { chunkedSummarize } from '../chunking/map-reduce.js';
+import { estimateTokens } from '../llm/token-estimate.js';
 import { parseDiffText, deriveTestCoverageHint, formatParsedDiffForPrompt } from '../diff/parse.js';
 import type { JobRegistry } from '../jobs/registry.js';
 import type { JobRunner } from '../jobs/runner.js';
@@ -228,7 +229,7 @@ function tierVMissingError() {
  * BEFORE sending it (so the caller gets an actionable message instead of the
  * opaque oMLX prefill_memory_exceeded 400 — sister bug report 2026-06-17).
  *
- * Uses the same `ceil(chars / 3.5)` token proxy as MlxHttpBackend.countTokens
+ * Uses the same CJK-aware `estimateTokens` proxy as MlxHttpBackend.countTokens
  * and a 0.85 safety factor (matching the chunker) so the limit sits below where
  * the engine's memory guard trips. Returns an error result, or null to proceed.
  */
@@ -239,12 +240,12 @@ function oversizeCheck(
   tierKey: Tier,
   opts: { chunked?: boolean } = {},
 ): { isError: true; content: Array<{ type: 'text'; text: string }> } | null {
-  const estTokens = Math.ceil(text.length / 3.5);
+  const estTokens = estimateTokens(text);
   const limit = Math.floor(numCtx * 0.85) - outputReserve;
   if (estTokens <= limit) return null;
   const hint = opts.chunked
     ? 'Use `summarize-long-chunked` (map-reduce — needs a client with a >60 s timeout, or the async-job path via `enqueue_job`). '
-    : 'Split the input into smaller pieces. ';
+    : 'Split the input into smaller pieces — or, if you only need a summary/digest (not structured extraction), use `summarize-long` instead. ';
   return {
     isError: true as const,
     content: [{ type: 'text' as const, text:
@@ -488,9 +489,34 @@ export function buildBridgeServer(
       }
       const tierKey = tierForTool(config, 'summarize');
       const tierCfg = config.tiers[tierKey];
-      const sizeErr = oversizeCheck(src.text, tierCfg.numCtx ?? 8192, MAX_OUTPUT_TOKENS.summarize, tierKey, { chunked: true });
-      if (sizeErr) return sizeErr;
       const t0 = Date.now();
+      if (oversizeCheck(src.text, tierCfg.numCtx ?? 8192, MAX_OUTPUT_TOKENS.summarize, tierKey, { chunked: true })) {
+        // Oversized for Tier-B `summarize` → auto-delegate to the Tier-C chunked map-reduce
+        // (chunkedSummarize single-calls if it fits Tier C, else maps). Plug-and-play: `summarize`
+        // never refuses on size alone; lossy output is acceptable by this tool's contract. The
+        // chunkedSummarize invocation mirrors the summarize-long-chunked handler — DRY tracked (task_4c4e4ca1).
+        const cTier = tierForTool(config, 'summarize-long-chunked');
+        const cCfg = config.tiers[cTier];
+        await sendProgress(extra, 0, 3, `oversized for Tier ${tierKey} → Tier ${cTier} chunked map-reduce`);
+        try {
+          const cRes = await chunkedSummarize({
+            source: src.text,
+            style,
+            backend: backendForTool(config, 'summarize-long-chunked'),
+            maxInputTokens: cCfg.numCtx ?? 8192,
+            signal: extra.signal,
+            chunkSize: parseEnvInt('OMCP_CHUNK_SIZE'),
+            chunkOverlap: parseEnvInt('OMCP_CHUNK_OVERLAP'),
+            concurrency: parseEnvInt('OMCP_CHUNK_CONCURRENCY'),
+            disableThinking: resolveThinking('summarize-long-chunked', thinking) === 'off',
+            onProgress: async (msg) => { await sendProgress(extra, 2, 3, `oversize→chunked: ${msg}`); },
+          });
+          const cFoot = buildFooter({ model: tierModelLabel(cCfg), tier: cTier, latencyMs: Date.now() - t0, promptTokens: cRes.promptTokens, completionTokens: cRes.completionTokens, chunks: cRes.chunksProcessed, partial: cRes.partial });
+          return { content: [{ type: 'text' as const, text: cRes.text.trim() }, ...(cFoot ? [{ type: 'text' as const, text: cFoot }] : [])] };
+        } catch (err) {
+          return toolCallError(err);
+        }
+      }
       await sendProgress(extra, 0, 3, `routing to Tier ${tierKey} (${tierModelLabel(tierCfg)})`);
       try {
         let safeText = src.text;
@@ -609,7 +635,7 @@ export function buildBridgeServer(
         await sendProgress(extra, 2, 3, 'generating…');
         const user = style ? `Style override: ${style}\n\nSource:\n${safeText}` : `Source:\n${safeText}`;
         const backend = backendForTool(config, 'summarize-long');
-        let result = await backend
+        const result = await backend
           .chat(
             {
               system: systemPrompt,
@@ -643,6 +669,12 @@ export function buildBridgeServer(
               chunkOverlap: parseEnvInt('OMCP_CHUNK_OVERLAP'),
               disableThinking: resolveThinking('summarize-long', thinking) === 'off',
               concurrency: parseEnvInt('OMCP_CHUNK_CONCURRENCY'),
+              onProgress: async (msg) => {
+                // Forward the chunked map-reduce progress so the bar doesn't freeze
+                // at 'falling back…' during a (potentially long) fallback — the
+                // message carries the phase; stays within summarize-long's step 2/3.
+                await sendProgress(extra, 2, 3, `fallback: ${msg}`);
+              },
             });
           });
         const latencyMs = Date.now() - t0;

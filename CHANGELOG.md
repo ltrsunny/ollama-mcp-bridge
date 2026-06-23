@@ -34,10 +34,17 @@ never enter frontier context (the largest per-call frontier saving of any tool).
 
 ### Fixed
 
-- **Oversize text inputs** (`summarize-long` / `summarize` / `extract`) now
-  return an actionable error (use `summarize-long-chunked` / async-job, or raise
-  oMLX `memory_guard_tier`) *before* the call, plus a translation of oMLX's
-  prefill memory-guard 400 — instead of an opaque failure on large files.
+- **Oversize text inputs — per-tool plug-and-play handling.** `summarize` now
+  AUTO-DELEGATES an over-Tier-B input to the Tier-C chunked map-reduce (single call if it
+  fits Tier C, else map-reduce) — it never refuses on size alone. `summarize-long` /
+  `extract` / `classify` return an actionable refusal (`summarize-long-chunked` / async-job,
+  or — for `extract`/`classify` — split the input, since chunking structured extraction
+  would silently corrupt via entity-straddling); the oversized-`extract` hint also points at
+  `summarize-long` for digest-class needs. Plus a translation of oMLX's prefill
+  memory-guard 400 — instead of an opaque failure on large files.
+- **CJK-aware size accounting.** The size guard and the chunker now count CJK glyphs ~1:1
+  (the previous flat `chars/3.5` proxy under-counted CJK ~3×, letting CJK-dense input slip
+  past the guard into oMLX's prefill memory guard). Latin/code token counts are unchanged.
 - **Silent empty completions** — `MlxHttpBackend.chat` now THROWS when oMLX
   returns a 200 with an empty completion (`in=0/out=0` — e.g. a decode abort or a
   prefill memory-guard soft-reject) instead of passing the blank result through as

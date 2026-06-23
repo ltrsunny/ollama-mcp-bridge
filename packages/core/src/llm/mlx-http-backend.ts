@@ -27,6 +27,7 @@
  */
 
 import type { LlmBackend, ChatOptions, ChatResult } from './backend.js';
+import { estimateTokens } from './token-estimate.js';
 
 export interface MlxHttpBackendOptions {
   /**
@@ -489,12 +490,15 @@ export class MlxHttpBackend implements LlmBackend {
     // consumer (summarize/extract/classify/transform all funnel through here),
     // so fail loudly instead. The `in=0 out=0` footer was the tell.
     if (text.trim() === '') {
+      // Generic, tool-agnostic: this backend is shared by every tool, so it must NOT
+      // name a specific tool ("summarize-long-chunked") or give orchestration advice —
+      // the CALLER decides how to react (the summarize-long handler auto-falls-back to
+      // chunked; other tools surface it). Keep "EMPTY completion" + "memory guard" in the
+      // text so callers that pattern-match the cause still recognise it.
       throw new Error(
         `MlxHttpBackend: oMLX returned an EMPTY completion ` +
-          `(prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}). ` +
-          `Likely a decode abort or a prefill memory-guard rejection under memory ` +
-          `pressure. For a large input use summarize-long-chunked or shrink it; ` +
-          `otherwise retry once the engine is idle.`,
+          `(prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}) — ` +
+          `likely a decode abort or a prefill memory-guard rejection under memory pressure.`,
       );
     }
 
@@ -502,14 +506,12 @@ export class MlxHttpBackend implements LlmBackend {
   }
 
   /**
-   * Approximate token count: `ceil(chars / 3.5)`.
-   *
-   * The exact tokenizer is not exposed over HTTP; approximation stays
-   * within ±15 % for typical prose/code.  The chunker applies a 0.85
-   * safety margin on top of proxy counts so this drift is acceptable.
+   * Approximate token count via {@link estimateTokens}: Latin/code ≈ `ceil(chars/3.5)`,
+   * CJK glyphs ≈ 1:1 (a flat `/3.5` proxy under-counts CJK ~3×). The exact tokenizer is
+   * not exposed over HTTP; the chunker's 0.85 safety margin absorbs the residual drift.
    */
   async countTokens(text: string): Promise<number> {
-    return Math.ceil(text.length / 3.5);
+    return estimateTokens(text);
   }
 
   /**

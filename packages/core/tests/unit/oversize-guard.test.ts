@@ -61,6 +61,15 @@ describe('oversize input guard', () => {
     expect(recorder.recorded).toHaveLength(0);
   });
 
+  it('summarize: oversized input AUTO-DELEGATES to chunked (Tier C) — no refusal, backend IS called', async () => {
+    const r = (await client.callTool({
+      name: 'summarize',
+      arguments: { text: 'word '.repeat(12_000) }, // ~17k est tokens > Tier B safe limit → delegate, not refuse
+    })) as ToolResult;
+    expect(r.isError).toBeFalsy(); // plug-and-play: summarize never refuses on size alone
+    expect(recorder.recorded.length).toBeGreaterThan(0); // delegated to the chunked map-reduce → model called
+  });
+
   it('normal-size input still reaches the backend (guard does not over-trigger)', async () => {
     await client.callTool({
       name: 'summarize-long',
