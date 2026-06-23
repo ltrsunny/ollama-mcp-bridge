@@ -84,14 +84,14 @@ Claude Code's 60 s wall on larger tiers. **MLX RSS is misleading**
   hardcode a version number here — that's exactly what rotted last time): PIN a
   known-good TAG and verify it with a REAL chat + strict-JSON probe — NOT a
   `/v1/models` liveness ping (it 200s even when chat is fully broken), and NOT brew
-  `stable`. On 2026-06-11 the tap moved `stable` to a BROKEN rc (every chat 500s
+  `stable`. brew `stable` has silently shipped a BROKEN rc before (every chat 500s
   `Chat template error: unicode-escape`), so a bare `brew install jundot/omlx/omlx`
-  gets a dead engine. The BREAKAGE was rc1-specific — the **0.4.4 FINAL release fixed
-  the unicode-escape bug**; verified-good on 2026-06-17 (real chat + strict-JSON AND
+  can get a dead engine. That breakage was rc1-specific — the **0.4.4 FINAL release
+  fixed the unicode-escape bug** and is verified-good (real chat + strict-JSON AND
   Qwen3-VL image + strict-JSON both pass) and pinned. Current pinned good tag: see
-  `brew list --pinned` + the installed keg (0.4.4, pinned 2026-06-17 — supersedes the
-  earlier 0.4.3 pin). Lesson stands: verify EACH new tag with a real chat + VLM-image
-  probe before trusting it; never trust `stable` or a `/v1/models` ping.
+  `brew list --pinned` + the installed keg (0.4.4). Lesson stands: verify EACH new tag
+  with a real chat + VLM-image probe before trusting it; never trust `stable` or a
+  `/v1/models` ping.
   Install/repair = build the chosen tag
   from its historical formula (`git -C "$(brew --repo jundot/omlx)" show
   <tag-bump-commit>:Formula/omlx.rb` → `brew install` → `brew pin`). v0.7
@@ -140,7 +140,7 @@ The Auditor is the user. No code lands ahead of an approved scope memo.
 
 `.claude/hooks/enforce-bridge.sh` is a PreToolUse hook on **Read + Bash** that
 *physically blocks* large raw reads (exit 2), routing them to the bridge.
-**Read** gates by `file_path`. **Bash** (re-added 2026-06-13 via a 7-voice debate
+**Read** gates by `file_path`. **Bash** (re-added via a 7-voice debate
 that UNANIMOUSLY rejected blocking surgical filters) blocks ONLY whole-file *dump*
 verbs (`cat`/`less`/`more`/`nl`/`tac`/`strings`/`base64`/`xxd`/`od`) on large
 band-matching targets, simple-command-only, with hard bail-to-allow on any
@@ -154,7 +154,7 @@ PostToolUse output-size monitor (the debate's deferred complement, for `python -
 `jq` leaks) is NOT yet built.
 
 Plugin distribution: the `dist`-gitignored structural blocker is **resolved in DESIGN** —
-`docs/scope-memos/v0.7.0-install-2026-05-15.md` (Draft 2, 2026-06-13) picks **route α**: ship the
+`docs/scope-memos/v0.7.0-install-2026-05-15.md` (Draft 2) picks **route α**: ship the
 built `dist` inside the plugin (un-gitignored on a release tag); `.mcp.json` launches
 `${CLAUDE_PLUGIN_ROOT}/.../dist`. NOT yet implemented (v0.7 work); npm-publish stays the alt channel.
 See that memo + `two-repo-workflow` memory +
@@ -194,7 +194,7 @@ Token-saving tactics still: `tsc | head -n 50`; `grep` + `Read offset/limit`; `r
     `GEM_PRO_MODEL=gemini-3.1-pro-preview` fail-fast, but prefer `agy_pro`).
   - **`copilot-free`** ⚠ — Copilot agentic ReAct via Google API key
     (gemini-3.5-flash). 设计上填 agentic+free+post-6/18 gap，0 Premium 烧。
-    **但 2026-05-22 empirical: AI Studio OAI-compat shim 上限 ~17.2K tokens =
+    **但 empirical: AI Studio OAI-compat shim 上限 ~17.2K tokens =
     Copilot 17K sysprompt 后 user prompt 只剩 ~200 字符。长 brief 全 400。
     短任务 OK，长 fan-out brief 不可用。** Cross-provider picker 设计已 fan-out
     收敛 (cross-provider-byok-picker-brief-2026-05-22.md) 但未实施。
@@ -202,7 +202,7 @@ Token-saving tactics still: `tsc | head -n 50`; `grep` + `Read offset/limit`; `r
 - **GitHub Models** (`ghm`, `ghm_pro`; helpers.sh): multi-vendor proxy
   via PAT `GITHUB_MODELS_TOKEN`. Free quota 50/day high + 150/day low.
   **Dynamic model selection encapsulated in `_ghm_pick_model` (helpers.sh,
-  2026-05-22 iron rule, mirrors NIM)**: fresh `/catalog/models` +
+  iron rule, mirrors NIM)**: fresh `/catalog/models` +
   context-aware filter + 5-tok ping on EVERY call, no env override
   possible. Tier inferred from function: `ghm`=low (15/min·150/day),
   `ghm_pro`=high (10/min·50/day, requires tool-calling capability).
@@ -218,7 +218,7 @@ Token-saving tactics still: `tsc | head -n 50`; `grep` + `Read offset/limit`; `r
   300 premium/month. Best for: cross-repo GitHub-MCP context.
 - **Nvidia NIM** (`nv_sum`, `nv_pro`): free OpenAI-compat gateway, ~120
   catalog models but **~40-70% 404 daily** (unstable). **Dynamic model
-  selection encapsulated in `_nim_pick_model` (helpers.sh, 2026-05-22
+  selection encapsulated in `_nim_pick_model` (helpers.sh,
   iron rule)**: fresh `/v1/models` + 5-tok ping on EVERY call, no env
   override possible. Tier inferred from function: `nv_sum`=≤15B,
   `nv_pro`=≥50B, random shuffle within tier. **Anti-pattern**:
@@ -259,6 +259,6 @@ Quota emergency (Claude session > 85%): handoff via `/handoff-to-gemini` is the
 - `docs/prior-art/` — Prior Art Review outputs
 - `docs/notes/` — research notes (no Auditor required, lighter-weight)
 - `docs/process/commit-discipline.md` — **product** (`feat/fix/release/chore`)
-  vs **dev-meta** (`meta(*):`) commits, never mixed (since 2026-05-12).
+  vs **dev-meta** (`meta(*):`) commits, never mixed.
 - `CHANGELOG.md` — Keep a Changelog format, SemVer. Version-sync enforced via
   `prepublishOnly`.
