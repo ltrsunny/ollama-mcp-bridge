@@ -1,6 +1,6 @@
 {
   "name": "local-mcp-toolbelt",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "Local-first MCP toolbelt: delegates summarise/classify/extract/transform tasks from any MCP client to a local oMLX inference server. Apple Silicon, MLX-accelerated, KV-cache persistent.",
   "license": "Apache-2.0",
   "repository": {

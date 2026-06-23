@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-23
+
 ### Theme
 
 **"Multimodal offload — local VLM tier."** Images are the most token-expensive
